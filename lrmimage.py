@@ -1,3 +1,7 @@
+'''lrmimage.py
+Looks like LrmFile is incomplete/deprecated.
+TODO - looks like only LrmImage is the only class used (in lrm.py). Looks like it's incomplete - may need to fill in code in the future.
+'''
 import numpy as np
 import lz4
 import lz4.frame
@@ -76,7 +80,6 @@ class LrmFile:
         return len(self.images)
 
 
-
 class LrmImage:
 
     def __init__(self):
@@ -130,7 +133,7 @@ class LrmImage:
 
 
     def compress(self, frame):
-
+        """"""
 
     def load(self, file):
         """ Load beta images from file

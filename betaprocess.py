@@ -1,4 +1,9 @@
+'''
+Looks like this file is deprecated in favor of lrm_process.py - but in correct-brightfield-image.py, the class is imported from here (only use).
+'''
+
 import lz4.frame
+import matplotlib.pyplot as plt
 import numpy as np
 import pickle
 from fractions import Fraction

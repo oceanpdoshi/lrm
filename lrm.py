@@ -26,6 +26,8 @@ matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
+# TODO - try to just use these, but adjust as needed
+
 '''CONSTANTS'''
 LED_PIN = 21
 
@@ -69,7 +71,7 @@ def append_slash(path):
 
     return path
 
-
+# TODO - figure out the isFilePath behavior - may be some hardcoded path handling
 def get_parent_directory(path):
     """ Get the parent directory of a given path """
     isFilePath = path[-4] == '.' and not (path[-1] == '/')
@@ -130,6 +132,7 @@ class LRM:
             self.led.off()
         self.info = {}
 
+    # TODO - look into the picamera datasheet to understand what each of these parameters are doing
     def __setup_beta(self, camera, gain=None, shutterUs=None):
         """Start up the camera with settings optimized for beta imaging
         gain: analog gain

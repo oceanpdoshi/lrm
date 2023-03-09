@@ -1,0 +1,15 @@
+name: lrm
+dependencies:
+  - numpy
+  - scipy
+  - matplotlib
+  - lz4
+  - seaborn
+  - scikit-image
+  - conda-forge::scikit-learn
+  - pip
+  - pip:
+    - picamera
+    - gpiozero
+
+# note that picamera has ot be done on the Raspberry Pi - won't work on Windows

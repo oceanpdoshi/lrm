@@ -6,12 +6,6 @@ The protocol loops numberCaptures times
 During each loop it:
 	captures 1 brightfield image
 	captures 1 beta image of betaSecondsPerImage total duration time
-
-rev 2
-Justin Klein
-Stanford University
-Department of Radiation Oncology
-2018
 '''
 from lrm import LRM
 import time

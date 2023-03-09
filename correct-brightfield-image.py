@@ -1,3 +1,7 @@
+'''correct-brightfield-image.py
+Brightfield correction script. This correpsonds to the uniform illumination correction (whitefield) mentioned in the paper.
+Corrects for per-pixel variance, any hardware (built-in) correction, etc.
+'''
 import numpy as np
 #import matplotlib
 #matplotlib.use('TkAgg')
@@ -6,7 +10,7 @@ from PIL import Image
 import glob
 import math
 #from betaprocess import Betafile
-from betaimage import BetaImage
+# from betaimage import BetaImage
 from multiprocessing.pool import ThreadPool
 import skimage
 import pandas as pd

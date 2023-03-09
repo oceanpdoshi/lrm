@@ -1,4 +1,13 @@
+'''lrm_process.py
+Betafile class stores:
+- image as np array
+- image resolution
+- imageInfo (dict)
+- fileandPath (str)
+
+'''
 import lz4.frame
+import matplotlib.pyplot as plt
 import numpy as np
 import pickle
 from fractions import Fraction
