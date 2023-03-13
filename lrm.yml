@@ -12,6 +12,6 @@ dependencies:
     - picamera
     - gpiozero
     - RPi.GPIO
-    # - python-prctl # https://pythonhosted.org/python-prctl/
-    # - picamera2 # see manual for dependencies before running this
+    # - python-prctl # https://pythonhosted.org/python-prctl/ for dependencies before running this
+    # - picamera2 # see manual for dependencies before running this - this repo was originally built with picamera (legacy), so just use that for now
 
