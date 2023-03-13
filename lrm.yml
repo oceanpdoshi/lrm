@@ -11,5 +11,7 @@ dependencies:
   - pip:
     - picamera
     - gpiozero
+    - RPi.GPIO
+    # - python-prctl # https://pythonhosted.org/python-prctl/
+    # - picamera2 # see manual for dependencies before running this
 
-# note that picamera has ot be done on the Raspberry Pi - won't work on Windows
