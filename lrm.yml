@@ -9,9 +9,14 @@ dependencies:
   - conda-forge::scikit-learn
   - pip
   - pip:
-    - picamera
+    # - picamera - no longer supported for 64-bit OS
     - gpiozero
     - RPi.GPIO
-    # - python-prctl # https://pythonhosted.org/python-prctl/ for dependencies before running this
-    # - picamera2 # see manual for dependencies before running this - this repo was originally built with picamera (legacy), so just use that for now
+    # https://pythonhosted.org/python-prctl/ for dependencies before running this
+    # sudo apt-get install build-essential libcap-dev
+    - python-prctl
+    # see manual for dependencies before running this
+    # sudo apt install -y python3-libcamera python3-kms++ 
+    # sudo apt install -y python3-prctl libatlas-base-dev ffmpeg python3-pip
+    - picamera2  
 
