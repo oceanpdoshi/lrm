@@ -1,12 +1,12 @@
 ''' LRM.py
 Defines LRM class that contains all beta microscope functionality
-Justin Klein
-Stanford University
-Department of Radiation Oncology
-2018
 '''
 
-import picamera
+# added imports
+from picamera2 import Picamera2
+from libcamera import controls as libcontrols
+from pprint import *
+
 import io
 from PIL import Image
 import numpy as np
@@ -26,27 +26,37 @@ matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
-# TODO - try to just use these, but adjust as needed
+# Useful stuff to print before modifying any configurations/controls
+# pprint(picam2.sensor_modes)
+# pprint(picam2.camera_controls)
+# pprint(picam2.camera_properties)
 
 '''CONSTANTS'''
 LED_PIN = 21
 
-'''V2 resolutions (3280,2464) (1920,1080) (1640,1232) (1640,922) (1280,720)  (640,480)'''
+'''V2 resolutions (3280,2464) (1920,1080) (1640,1232) (1640,922) (1280,720) (640,480)'''
+
+# Main stream configuration
 DEFAULT_RESOLUTION = (3280, 2464)
-DEFAULT_SENSOR_MODE = 3
-DEFAULT_THROW_AWAY_FRAMES = 1
-DEFAULT_FRAMERATE_RANGE = (0.1, 15)
-DEFAULT_AWB_GAINS = (1, 1)
+DEFAULT_STREAM_FORMAT = 'XBGR8888'
 
-CAMERA_TIMEOUT = 120
+# Raw stream configuration
+DEFAULT_SENSOR_MODE = 3 # 10 bit, (3280, 2464), SRGGB10_CSI2P format, (75us, 11766829us) exposure limits, 21.19fp
 
-SHUTTER_THRESHOLD = 10
+# DEFAULT_THROW_AWAY_FRAMES = 1 # never used, somewhere in manual this is mentioned, not important for now
+# DEFAULT_FRAMERATE_RANGE = (0.1, 15) # this is set by config
+DEFAULT_AWB_GAINS = (1.0/8.0*32.0, 11.0/8.0*32.0) # disables awb when ColourGains is set
+
+# Percent differece threshold for ExposureTime and AnalogueGain for __check_camera()
+EXPOSURE_TIME_THRESHOLD = 10
 GAIN_THRESHOLD = 25
+
 BETA_IMAGE_BITS = 16
 BETA_IMAGE_THRESHOLD = 0
 
-'''SET CAPTURE TIMEOUT'''
-picamera.PiCamera.CAPTURE_TIMEOUT = CAMERA_TIMEOUT
+# '''SET CAPTURE TIMEOUT'''
+# CAMERA_TIMEOUT = 120
+# picamera.PiCamera.CAPTURE_TIMEOUT = CAMERA_TIMEOUT
 
 
 # Some useful functions
@@ -71,9 +81,10 @@ def append_slash(path):
 
     return path
 
-# TODO - figure out the isFilePath behavior - may be some hardcoded path handling
-def get_parent_directory(path):
-    """ Get the parent directory of a given path """
+
+def _get_parent_directory(path):
+    """Get the parent directory of a given filepath. If path is to a dir, just return the dirpath but with a / at the end"""
+    # Check that file extension is ".xxx" and that path doesn't end with '/'
     isFilePath = path[-4] == '.' and not (path[-1] == '/')
 
     if isFilePath:
@@ -84,16 +95,17 @@ def get_parent_directory(path):
 
 
 def check_or_make_directory(path):
-    """ Check for or make path to data sub directory 
-    """
+    """ Check for or make path to data sub directory """
 
-    path = get_parent_directory(path)
+    path = _get_parent_directory(path)
     directory = os.path.dirname(path)
     dirExists = os.path.exists(directory)
 
     if not dirExists:
         os.makedirs(directory)
 
+# TODO - update all the docstrings and delete the old/deprecated code
+# TODO - Don't open a Preview.QTGL window upon class initialization - write a user function to do that
 
 class LRM:
     """Class containing all beta microscope functionality
@@ -120,130 +132,89 @@ class LRM:
         self.lastSaveFileFullPath = None
         self.lastCaptureDurationSeconds = None
         self.logFileFullPath = None
-        self.led = None
         self.lastBfImage = None
         self.lastBetaImage = None
 
+        # Most recent analog gain setting and exposure setting (us)
         self._gainSet = None
-        self._shutterSet = None
+        self._exposureSet = None # NOTE - this was changed from shutterSET - old repo used shutter speed, here we use exposures https://github.com/raspberrypi/picamera2/issues/145
 
-        if self.led == None:
-            self.led = LED(LED_PIN)
-            self.led.off()
         self.info = {}
 
-    # TODO - look into the picamera datasheet to understand what each of these parameters are doing
-    def __setup_beta(self, camera, gain=None, shutterUs=None):
+        self.led = LED(LED_PIN)
+        self.led.off()
+
+        # Configure (Chapter 4, Appendix B) and start() the camera
+        self.picam2 = Picamera2()
+        # TODO - deide whether or not we need raw stream
+        # config = self.picam2.create_still_configuration(main={"size" : DEFAULT_RESOLUTION, "format" : DEFAULT_STREAM_FORMAT}, raw={self.picam2.sensor_modes[DEFAULT_SENSOR_MODE]})
+        config = self.picam2.create_still_configuration(main={"size" : DEFAULT_RESOLUTION, "format" : DEFAULT_STREAM_FORMAT})
+        self.picam2.configure(config)
+        self.picam2.start() # Uses Preview.NULL by default
+
+    # TODO - rename __setup_beta() and __setup_brightfield() to __setup_beta_controls() and __setup_brightfield_controls()
+
+    def __setup_beta(self, gain=None, exposure_us=None, ColourGains=DEFAULT_AWB_GAINS):
         """Start up the camera with settings optimized for beta imaging
         gain: analog gain
-        shutteUs: shutter speed in microseconds
+        exposure_us : exposure time in us
         """
 
         # Gain and shutter speed must be provided
-        if gain is None or shutterUs is None:
-            return False
+        if gain is None:
+            raise Exception("No gain provided!")
+        elif exposure_us is None:
+            raise Exception("No exposure_us provided!")
 
         # Copy provided values into LRM gain and shutter setpoint variables
         self._gainSet = gain
-        self._shutterSet = shutterUs
+        self._exposureSet = exposure_us
 
-        # Settings for beta imaging mode
-        camera.framerate_range = (0.1, 15)
-        camera.resolution = (3280, 2464)
-        camera.sensor_mode = 3
-        camera.sharpness = 0
-        camera.contrast = 0
-        camera.brightness = 50
-        camera.saturation = 0
-        camera.video_stabilization = False
-        camera.exposure_compensation = 0
-        camera.meter_mode = 'average'
-        camera.image_effect = 'none'
-        camera.image_denoise = False
-        camera.color_effects = None
-        camera.drc_strength = 'off'
-        camera.awb_gains = (1, 1)
-        camera.awb_mode = 'auto'
-        camera.exposure_mode = 'auto'
-
-        # Set the gain
-        camera.exposure_mode = 'auto'
-
-        if gain < 2.5:
-            camera.shutter_speed = 500 * 1000
-            camera.iso = 60
-            time.sleep(2)
-
-        if (gain >= 2.5) and (gain < 5):
-            camera.shutter_speed = 100 * 1000
-            camera.iso = 150
-            time.sleep(2)
-
-        if (gain >= 5) and (gain < 7.5):
-            camera.shutter_speed = 50 * 1000
-            camera.iso = 300
-            time.sleep(3)
-
-        if (gain >= 7.5) and (gain < 10):
-            camera.shutter_speed = 15 * 1000
-            camera.iso = 475
-            time.sleep(3)
-
-        if gain >= 10:
-            camera.shutter_speed = 8 * 100
-            camera.iso = 600
-            time.sleep(3)
-
-        # Set the shutter speed
-        camera.shutter_speed = shutterUs
-
-        framerate = 1. / (shutterUs / 1000000.)
-
-        if not (framerate > 60 or framerate < 0.1):
-            camera.framerate = framerate
-
-        camera.awb_mode = 'off'
-        camera.exposure_mode = 'off'
-
-        # Make sure the camera is setup correctly
-        # self.__check_camera(camera)
-
+        # Settings for beta imaging mode - see Appendix C, adopted from original code
+        controls = {
+            'ScalerCrop' : (0, 0, 3280, 2464), # default
+            'Sharpness'  : 1.0, # default
+            'Contrast'   : 1.0, # default
+            'Brightness' : 0.0, # default
+            'Saturation' : 1.0, # deault
+            'ExposureValue' : 0.0, # default
+            'AeMeteringMode' : 0, # default (libcontrols.AeMeteringModeEnum.CentreWeighted)
+            'NoiseReductionMode': 0, # default - enum type doesn't work as per manual
+            'ColourGains' : ColourGains, # set to match ratio setting used for their setup
+            # 'AwbEnable': False, # Shouldn't affect RAW - disabled by setting colourgain
+            # 'AwbMode': 0, # default = auto (libcontrols.AwbModeEnum.Auto)
+            'AeEnable' : False, # no automatic updates to gain and exposure
+            'AeExporeMode' : 0, # default (normal)
+            'AnalogueGain' : gain,
+            'ExposureTime' : exposure_us
+        }
+        self.picam2.set_controls(controls)
         # wait for automatic gain/shutter adjustment
         time.sleep(2)
 
-    def __setup_brightfield(self, camera, gain=None, shutterUs=None):
-        """Start up the camera with settings optimized for beta imaging
-        gain: analog gain
-        shutteUs: shutter speed in microseconds
-        """
-
-        # Gain and shutter speed must be provided
-        if gain is None or shutterUs is None:
-            return False
-
-        # Copy provided values into LRM gain and shutter setpoint variables
-        self._gainSet = gain
-        self._shutterSet = shutterUs
-
-        # Settings for brightfield imaging mode
-        camera.framerate_range = (30, 30)
-        camera.resolution = (3280, 2464)
-        camera.sensor_mode = 3
-        camera.sharpness = 0
-        camera.contrast = 0
-        camera.brightness = 50
-        camera.saturation = 0
-        camera.video_stabilization = False
-        camera.exposure_compensation = 0
-        camera.meter_mode = 'average'
-        camera.image_effect = 'none'
-        camera.image_denoise = False
-        camera.color_effects = None
-        camera.drc_strength = 'off'
-        camera.awb_gains = (1, 2)
-        camera.awb_mode = 'auto'
+        # Old code + settings
+        '''
+        camera.framerate_range = (0.1, 15) # set by config
+        camera.resolution = (3280, 2464) # use default scalerCrop (full image)
+        camera.sensor_mode = 3 # already set by config
+        camera.sharpness = 0 # set
+        camera.contrast = 0 # set
+        camera.brightness = 50 # set
+        camera.saturation = 0 # set
+        camera.video_stabilization = False # can't set this option
+        camera.exposure_compensation = 0 # renamed to ExposureValue - set
+        camera.meter_mode = 'average' # renamed to AeMeteringMode - set to defaults
+        camera.image_effect = 'none' # can't even set this
+        camera.image_denoise = False # set (NoiseReductionMode)
+        camera.color_effects = None # see colour correction matrix and colour gains
+        camera.drc_strength = 'off' # can't set this
+        camera.awb_gains = (1, 1) # same thing as color_gains - note that this only does something in old code if awb_mode = 'off', in new code it turns awb off!
+        camera.awb_mode = 'auto' # setting this not to 'off' makes setting gains pointless - jk they set it back to 'off' later
+        camera.exposure_mode = 'auto'
 
         # Set the gain
+        camera.exposure_mode = 'auto'
+
         if gain < 2.5:
             camera.shutter_speed = 500 * 1000
             camera.iso = 60
@@ -277,15 +248,29 @@ class LRM:
         if not (framerate > 60 or framerate < 0.1):
             camera.framerate = framerate
 
-        camera.awb_mode = 'off'
+        camera.awb_mode = 'off' 
         camera.exposure_mode = 'off'
+        '''
 
-        # Make sure the camera is setup correctly
-        # self.__check_camera(camera)
+    # TODO - figure out why this function exists - it's the same as _setup_beta, but (1,1) -> (1,2) in terms of old awb gains
+    def __setup_brightfield(self, gain=None, exposure_us=None):
+        """Start up the camera with settings optimized for beta imaging
+        gain: analog gain
+        exposure_us : exposure time in us
+        """
 
-        # wait for automatic gain/shutter adjustment
-        # time.sleep(2)
+        self.__setup_beta(gain, exposure_us, ColourGains=(1.0/8.0 * 32.0, 2.0/8.0*32.0))
 
+
+    def __check_camera(self):
+        """ Check both the gain and exposure settings using metadata functionality"""
+        metadata = self.picam2.capture_metadata()
+
+        return
+
+    # Old deprecated code for checking gain and exposure settings of camera
+    # NOTE - refactored this to use Picamera2 metadata function 
+    '''
     def __check_camera(self, camera):
         """ Check both the gain and exposure settings
         """
@@ -335,7 +320,8 @@ class LRM:
             gainCorrect = is_within_percent(analog_gain, self._gainSet, GAIN_THRESHOLD)
 
         return gainCorrect
-
+    '''
+    
     def __reboot(self, camera):
         """ Reboots the camera
         """

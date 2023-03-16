@@ -14,9 +14,18 @@ dependencies:
     - RPi.GPIO
     # https://pythonhosted.org/python-prctl/ for dependencies before running this
     # sudo apt-get install build-essential libcap-dev
-    - python-prctl
+    # - python-prctl
     # see manual for dependencies before running this
     # sudo apt install -y python3-libcamera python3-kms++ 
     # sudo apt install -y python3-prctl libatlas-base-dev ffmpeg python3-pip
     - picamera2  
 
+# Unfortunately, getting picamera2 to work inside a conda environment may not be straight forward
+# For now going to install everything into Python enviroment loaded into Raspberry Pi using sudo pip3 install
+# Will use recommended install (apt) for picamera2, all other packages also isntalled using pip - packages are installed as listed in the below url
+# https://forums.raspberrypi.com/viewtopic.php?t=213591
+
+# TODO - at some point turn this into a requirements.txt
+# according to manual (section 9.5) can use this with virtual environmnets
+# But have to use command to include site-packages
+# python -m venv --system-site-packages my-env
