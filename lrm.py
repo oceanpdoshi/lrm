@@ -31,11 +31,10 @@ import matplotlib.cm as cm
 # pprint(picam2.camera_controls)
 # pprint(picam2.camera_properties)
 
-'''CONSTANTS'''
+# Constants
 LED_PIN = 21
 
 '''V2 resolutions (3280,2464) (1920,1080) (1640,1232) (1640,922) (1280,720) (640,480)'''
-
 # Main stream configuration
 DEFAULT_RESOLUTION = (3280, 2464)
 DEFAULT_STREAM_FORMAT = 'XBGR8888'
@@ -43,23 +42,14 @@ DEFAULT_STREAM_FORMAT = 'XBGR8888'
 # Raw stream configuration
 DEFAULT_SENSOR_MODE = 3 # 10 bit, (3280, 2464), SRGGB10_CSI2P format, (75us, 11766829us) exposure limits, 21.19fp
 
-# DEFAULT_THROW_AWAY_FRAMES = 1 # never used, somewhere in manual this is mentioned, not important for now
-# DEFAULT_FRAMERATE_RANGE = (0.1, 15) # this is set by config
-DEFAULT_AWB_GAINS = (1.0/8.0*32.0, 11.0/8.0*32.0) # disables awb when ColourGains is set
+# Default ColourGain Setting (camera controls) - disables awb when set
+DEFAULT_AWB_GAINS = (1.0/8.0*32.0, 11.0/8.0*32.0)
 
 # Percent differece threshold for ExposureTime and AnalogueGain for __check_camera()
 EXPOSURE_TIME_THRESHOLD = 10
 GAIN_THRESHOLD = 25
 
-BETA_IMAGE_BITS = 16
-BETA_IMAGE_THRESHOLD = 0
-
-# '''SET CAPTURE TIMEOUT'''
-# CAMERA_TIMEOUT = 120
-# picamera.PiCamera.CAPTURE_TIMEOUT = CAMERA_TIMEOUT
-
-
-# Some useful functions
+# Util functions
 def is_within_percent(a, b, percent):
     """ Return true if a is percent within b """
     diff = abs(a - b)
@@ -137,7 +127,7 @@ class LRM:
 
         # Most recent analog gain setting and exposure setting (us)
         self._gainSet = None
-        self._exposureSet = None # NOTE - this was changed from shutterSET - old repo used shutter speed, here we use exposures https://github.com/raspberrypi/picamera2/issues/145
+        self._exposureSet = None # TODO - this was changed from shutterSET - old repo used shutter speed, here we use exposures https://github.com/raspberrypi/picamera2/issues/145
 
         self.info = {}
 
@@ -146,14 +136,14 @@ class LRM:
 
         # Configure (Chapter 4, Appendix B) and start() the camera
         self.picam2 = Picamera2()
-        # TODO - deide whether or not we need raw stream
+        # TODO - decide whether or not we need raw stream
         # config = self.picam2.create_still_configuration(main={"size" : DEFAULT_RESOLUTION, "format" : DEFAULT_STREAM_FORMAT}, raw={self.picam2.sensor_modes[DEFAULT_SENSOR_MODE]})
         config = self.picam2.create_still_configuration(main={"size" : DEFAULT_RESOLUTION, "format" : DEFAULT_STREAM_FORMAT})
         self.picam2.configure(config)
         self.picam2.start() # Uses Preview.NULL by default
+        time.sleep(2)
 
     # TODO - rename __setup_beta() and __setup_brightfield() to __setup_beta_controls() and __setup_brightfield_controls()
-
     def __setup_beta(self, gain=None, exposure_us=None, ColourGains=DEFAULT_AWB_GAINS):
         """Start up the camera with settings optimized for beta imaging
         gain: analog gain
@@ -170,87 +160,31 @@ class LRM:
         self._gainSet = gain
         self._exposureSet = exposure_us
 
-        # Settings for beta imaging mode - see Appendix C, adopted from original code
+        # any paramter not commented is just set to default alue
         controls = {
-            'ScalerCrop' : (0, 0, 3280, 2464), # default
-            'Sharpness'  : 1.0, # default
-            'Contrast'   : 1.0, # default
-            'Brightness' : 0.0, # default
-            'Saturation' : 1.0, # deault
-            'ExposureValue' : 0.0, # default
-            'AeMeteringMode' : 0, # default (libcontrols.AeMeteringModeEnum.CentreWeighted)
-            'NoiseReductionMode': 0, # default - enum type doesn't work as per manual
-            'ColourGains' : ColourGains, # set to match ratio setting used for their setup
-            # 'AwbEnable': False, # Shouldn't affect RAW - disabled by setting colourgain
-            # 'AwbMode': 0, # default = auto (libcontrols.AwbModeEnum.Auto)
-            'AeEnable' : False, # no automatic updates to gain and exposure
-            'AeExporeMode' : 0, # default (normal)
-            'AnalogueGain' : gain,
-            'ExposureTime' : exposure_us
+            'AeConstraintMode': 0,
+            'AeEnable': False, # don't want Autoexposure
+            'AeExposureMode': 0,
+            'AeMeteringMode': 0,
+            'AnalogueGain': gain,
+            'AwbEnable': False, # Don't want autowhite balances, this is also automatically disabled by setting ColourGains
+            'AwbMode': 0,
+            'Brightness': 0.0,
+            # 'ColourCorrectionMatrix': (-16.0, 16.0, None), read-only, see manual (Appendix C)
+            'ColourGains': ColourGains, # See manual (Appendix C)
+            'Contrast': 1.0,
+            'ExposureTime': exposure_us,
+            'ExposureValue': 0.0,
+            # 'FrameDurationLimits': (47183, 11767556, None), set by camera_config 
+            'NoiseReductionMode': 0, # no noise reduction wanted
+            'Saturation': 1.0,
+            'ScalerCrop': (0, 0, 3280, 2464),
+            'Sharpness': 1.0
         }
         self.picam2.set_controls(controls)
         # wait for automatic gain/shutter adjustment
         time.sleep(2)
 
-        # Old code + settings
-        '''
-        camera.framerate_range = (0.1, 15) # set by config
-        camera.resolution = (3280, 2464) # use default scalerCrop (full image)
-        camera.sensor_mode = 3 # already set by config
-        camera.sharpness = 0 # set
-        camera.contrast = 0 # set
-        camera.brightness = 50 # set
-        camera.saturation = 0 # set
-        camera.video_stabilization = False # can't set this option
-        camera.exposure_compensation = 0 # renamed to ExposureValue - set
-        camera.meter_mode = 'average' # renamed to AeMeteringMode - set to defaults
-        camera.image_effect = 'none' # can't even set this
-        camera.image_denoise = False # set (NoiseReductionMode)
-        camera.color_effects = None # see colour correction matrix and colour gains
-        camera.drc_strength = 'off' # can't set this
-        camera.awb_gains = (1, 1) # same thing as color_gains - note that this only does something in old code if awb_mode = 'off', in new code it turns awb off!
-        camera.awb_mode = 'auto' # setting this not to 'off' makes setting gains pointless - jk they set it back to 'off' later
-        camera.exposure_mode = 'auto'
-
-        # Set the gain
-        camera.exposure_mode = 'auto'
-
-        if gain < 2.5:
-            camera.shutter_speed = 500 * 1000
-            camera.iso = 60
-            time.sleep(2)
-
-        if (gain >= 2.5) and (gain < 5):
-            camera.shutter_speed = 100 * 1000
-            camera.iso = 150
-            time.sleep(2)
-
-        if (gain >= 5) and (gain < 7.5):
-            camera.shutter_speed = 50 * 1000
-            camera.iso = 300
-            time.sleep(3)
-
-        if (gain >= 7.5) and (gain < 10):
-            camera.shutter_speed = 15 * 1000
-            camera.iso = 475
-            time.sleep(3)
-
-        if gain >= 10:
-            camera.shutter_speed = 8 * 100
-            camera.iso = 600
-            time.sleep(3)
-
-        # Set the shutter speed
-        camera.shutter_speed = shutterUs
-
-        framerate = 1. / (shutterUs / 1000000.)
-
-        if not (framerate > 60 or framerate < 0.1):
-            camera.framerate = framerate
-
-        camera.awb_mode = 'off' 
-        camera.exposure_mode = 'off'
-        '''
 
     # TODO - figure out why this function exists - it's the same as _setup_beta, but (1,1) -> (1,2) in terms of old awb gains
     def __setup_brightfield(self, gain=None, exposure_us=None):
@@ -262,80 +196,27 @@ class LRM:
         self.__setup_beta(gain, exposure_us, ColourGains=(1.0/8.0 * 32.0, 2.0/8.0*32.0))
 
 
+    # TODO - see the control loop that uses this function and reboot - maybe don't even need these functions..
     def __check_camera(self):
         """ Check both the gain and exposure settings using metadata functionality"""
         metadata = self.picam2.capture_metadata()
+        gain = metadata["AnalogueGain"]
+        exposure_us = metadata["ExposureTime"]
 
-        return
+        exposure_correct = is_within_percent(self.exposureSet, exposure_us, EXPOSURE_TIME_THRESHOLD)
+        gain_correct = is_within_percent(self.gainSet, gain, GAIN_THRESHOLD)
 
-    # Old deprecated code for checking gain and exposure settings of camera
-    # NOTE - refactored this to use Picamera2 metadata function 
-    '''
-    def __check_camera(self, camera):
-        """ Check both the gain and exposure settings
-        """
-        return (self.__check_shutter(camera) and self.__check_gain(camera))
+        return exposure_correct and gain_correct
 
-    def __check_shutter(self, camera):
-        """ Compare camera shutter speed with the desired setpoint
-        returns: True if the shutter speed is within SHUTTER_THRESHOLD of the shutter setpoint
-        """
-
-        # Sometimes the camera is still initializing and shutter_speed
-        # doesn't have a value; in that case wait till it has something
-        while camera.shutter_speed is None:
-            time.sleep(0.1)
-
-        if self._shutterSet is None:
-            return True
-        else:
-            shutter_us = camera.shutter_speed
-            exposure_us = camera.exposure_speed
-
-        shutterCorrect = is_within_percent(shutter_us, self._shutterSet, SHUTTER_THRESHOLD)
-
-        return shutterCorrect
-
-    def __check_gain(self, camera):
-        """ Compare camera analog gain with the desired setpoint
-        returns: True if the analog gain is within GAIN_THRESHOLD of the analog gain setpoint
-        """
-
-        analog_gain = camera.analog_gain
-
-        while analog_gain == 0:
-            print("analog gain = 0 ... retrying")
-
-            time.sleep(5)
-
-            stream = io.BytesIO()
-            next(camera.capture_continuous(stream, 'jpeg', use_video_port=True, bayer=False))
-
-            analog_gain = camera.analog_gain
-            # give camera time to
-
-        if self._gainSet is None:
-            gainCorrect = True
-        else:
-            gainCorrect = is_within_percent(analog_gain, self._gainSet, GAIN_THRESHOLD)
-
-        return gainCorrect
-    '''
     
-    def __reboot(self, camera):
-        """ Reboots the camera
-        """
+    def __reboot(self):
+        """ Reboots the camera """
 
-        # Framerate needs to be set to 1 in order to let the camera close at long shutter speeds
-        print("Setting framerate to 1 and closing camera ...")
-        camera.framerate = 1
-        camera.close()
-        print("..done.")
-
-        camera = picamera.PiCamera()
+        self.picam2.stop()
+        config = self.picam2.create_still_configuration(main={"size" : DEFAULT_RESOLUTION, "format" : DEFAULT_STREAM_FORMAT})
+        self.picam2.configure(config)
+        self.picam2.start() # Uses Preview.NULL by default
         time.sleep(3)
-
-        return camera
 
     def __stream_to_np(self, stream):
         """Convert a supplied stream into an numpy array
