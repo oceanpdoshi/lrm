@@ -96,6 +96,7 @@ def check_or_make_directory(path):
 
 # TODO - update all the docstrings and delete the old/deprecated code
 # TODO - Don't open a Preview.QTGL window upon class initialization - write a user function to do that
+# TODO - look for time.sleep() calls and make changes accordingly
 
 class LRM:
     """Class containing all beta microscope functionality
@@ -119,11 +120,6 @@ class LRM:
     """
 
     def __init__(self):
-        self.lastSaveFileFullPath = None
-        self.lastCaptureDurationSeconds = None
-        self.logFileFullPath = None
-        self.lastBfImage = None
-        self.lastBetaImage = None
 
         # Most recent analog gain setting and exposure setting (us)
         self._gainSet = None
@@ -196,7 +192,6 @@ class LRM:
         self.__setup_beta(gain, exposure_us, ColourGains=(1.0/8.0 * 32.0, 2.0/8.0*32.0))
 
 
-    # TODO - see the control loop that uses this function and reboot - maybe don't even need these functions..
     def __check_camera(self):
         """ Check both the gain and exposure settings using metadata functionality"""
         metadata = self.picam2.capture_metadata()
@@ -208,7 +203,7 @@ class LRM:
 
         return exposure_correct and gain_correct
 
-    
+    # TODO - see the control loop that uses this function and reboot - maybe don't even need this function
     def __reboot(self):
         """ Reboots the camera """
 
@@ -218,188 +213,77 @@ class LRM:
         self.picam2.start() # Uses Preview.NULL by default
         time.sleep(3)
 
-    def __stream_to_np(self, stream):
-        """Convert a supplied stream into an numpy array
-        returns image from stream as numpy array
+
+    # TODO - reinstate reboot loop under if not self.__check_camera() ???
+    def __snap_beta(self, threshold=0):
+        """
+        Grabs an RGB frame (np.ndarrary) from camera using beta imaging controls
+        Sums across the RGB channels and zeros out pixels less than threshold (default 0 does no thresholding).
+        returns: np.ndarray camera image, image metadata+additional info
         """
 
-        stream.seek(0)
+        # Setup camera controls, and check you've waited long enough
+        # self.__setup_beta(self._gainSet, self._exposureSet)
+        if not self.__check_camera():
+            metadata = self.picam2.capture_metadata()
+            print("Gain was: " + str(metadata["AnalogueGain"]) + ", wanted " + str(self._gainSet))
+            print("ExposureTime: " + str(metadata["ExposureTime"]) + " [us]" + ", wanted " + str(self._exposureSet) + " [us]")
+            raise Exception("Camera gain or exposure time was not set correctly.")
 
-        # Copy locally
-        streamBuffer = stream.getvalue()
-
-        # Convert to numpy array
-        image = np.array(Image.open(io.BytesIO(streamBuffer)))
-
-        # Convert to B/W by summing color channels into one 16-bit channel
-        if len(image.shape) == 3:
-            image = image.sum(axis=2, dtype=np.uint16)
-
-        return image
-
-    def __stream_to_RGB_np(self, stream):
-        """Convert a supplied stream into an numpy array
-        """
-
-        stream.seek(0)
-
-        # Copy locally
-        streamBuffer = stream.getvalue()
-
-        # Convert to numpy array
-        image = np.array(Image.open(io.BytesIO(streamBuffer)))
-        # image = image.astype(np.uint8)
-
-        return image
-
-    def __get_info(self, camera):
-        """ Grab settings from the camera and return as dictionary
-        """
-
-        info = {'analog_gain': float(camera.analog_gain),
-                'framerate_range': (float(camera.framerate_range[0]), float(camera.framerate_range[1])),
-                'sharpness': camera.sharpness,
-                'brightness': camera.brightness,
-                'saturation': camera.saturation,
-                'video_stabilization': camera.video_stabilization,
-                'exposure_compensation': camera.exposure_compensation,
-                'meter_mode': camera.meter_mode,
-                'image_effect': camera.image_effect,
-                'image_denoise': camera.image_denoise,
-                'color_effects': camera.color_effects,
-                'drc_strength': camera.drc_strength,
-                'awb_gains': (float(camera.awb_gains[0]), float(camera.awb_gains[1])),
-                'iso': camera.iso,
-                'shutter_speed': camera.shutter_speed,
-                'exposure_speed': camera.exposure_speed,
-                'awb_mode': camera.awb_mode,
-                'exposure_mode': camera.exposure_mode,
-                'sensor_mode': camera.sensor_mode,
-                'resolution': (camera.resolution[0], camera.resolution[1]),
-                'datetime': datetime.datetime.now}
-
-        return info
-
-    def __snap_beta(self, camera, threshold=0):
-        """Grab frame from camera and return stream as numpy array
-        rgb: returns image as 3d numpy array with RGB channels
-        returns: numpy array of camera image
-        """
-
-        # Check, reboot, and setup until camera settings are correct
-        while not self.__check_camera(camera):
-            print("Check camera failed, rebooting ...")
-            print(f"Gain setpoint = {self._gainSet} Current = {camera.analog_gain}")
-            print(f"Shutter setpoint = {self._shutterSet} Current = {camera.shutter_speed}")
-
-            camera = self.__reboot(camera)
-            self.__setup_beta(camera, self._gainSet, self._shutterSet)
-
-        # Capture from the camera
-        stream = io.BytesIO()
+        # Capture image (np.ndarray) from the camera + record total capture time
+        # NOTE - use the naming convention array to differentiate from PIL image objects - consistent with picamera2 manual
         captureStartTime = time.time()
-        next(camera.capture_continuous(stream, 'jpeg', use_video_port=True, bayer=False))
+        request = self.picam2.capture_request("main")
+        array, metadata = request.make_array(), request.get_metadata()
         captureTimeSeconds = time.time() - captureStartTime
 
-        # Grab image from camera (returned as stream)
-        self.info = self.__get_info(camera)
+        self.info = self.__get_info()
         self.info['capture_time_s'] = captureTimeSeconds
+        
+        # Sum across RGB Channels to generate one channel array
+        array = array.sum(axis=2, dtype=np.uint16)
 
-        if stream is not None:
-            # Copy covert stream to np array and copy into image variable
-            image = self.__stream_to_np(stream)
+        # Apply threshold
+        array[array < threshold] = 0
 
-            # Apply threshold
-            image[image < threshold] = 0
+        # Compute some image metrics and store in info
+        self.info['image_sum'] = array.sum()
+        self.info['image_std'] = np.std(array)
+        self.info['image_max'] = array.max()
+        self.info['image_std'] = array.min()
+        self.info['image_mean'] = array.mean()
 
-            # Compute some image metrics and store in info
-            self.info['image_sum'] = image.sum()
-            self.info['image_std'] = np.std(image)
-            self.info['image_max'] = image.max()
-            self.info['image_std'] = image.min()
-            self.info['image_mean'] = image.mean()
+        return array, self.info
 
-            return image, self.info
-
-    def __snap_brightfield(self, camera):
-        """Grab frame from camera and return stream as numpy array
-        rgb: returns image as 3d numpy array with RGB channels
-        returns: numpy array of camera image
+    def __snap_brightfield(self):
+        """
+        Grabs an RGB frame (np.ndarrary) from camera with brightfield imaging controls
+        returns: (np.ndarray) camera image, (dict) image metadata+additonal info
         """
 
-        # Check, reboot, and setup until camera settings are correct
-        while not self.__check_camera(camera):
-            print("Check camera failed, rebooting ...")
-            print("Gain setpoint = " + str(self._gainSet) + " Current = " + str(camera.analog_gain))
-            print("Shutter setpoint = " + str(self._shutterSet) + " Current = " + str(camera.shutter_speed))
+        # Setup camera controls, and check you've waited long enough
+        # self.__setup_brightfield(self._gainSet, self._exposureSet)
+        if not self.__check_camera():
+            metadata = self.picam2.capture_metadata()
+            print("Gain was: " + str(metadata["AnalogueGain"]) + ", wanted " + str(self._gainSet))
+            print("ExposureTime: " + str(metadata["ExposureTime"]) + " [us]" + ", wanted " + str(self._exposureSet) + " [us]")
+            raise Exception("Camera gain or exposure time was not set correctly.")
 
-            camera = self.__reboot(camera)
-            self.__setup_brightfield(camera, self._gainSet, self._shutterSet)
-
-        # Capture from the camera
-        stream = io.BytesIO()
+        # Capture image (np.ndarray) from the camera + record total capture time
+        # NOTE - use the naming convention array to differentiate from PIL image objects - consistent with picamera2 manual
         captureStartTime = time.time()
-        next(camera.capture_continuous(stream, 'jpeg', use_video_port=True, bayer=False))
+        request = self.picam2.capture_request("main")
+        array, metadata = request.make_array(), request.get_metadata()
         captureTimeSeconds = time.time() - captureStartTime
 
-        # Grab image from camera (returned as stream)
-        self.info = self.__get_info(camera)
+        self.info = self.__get_info()
         self.info['capture_time_s'] = captureTimeSeconds
 
-        if stream is not None:
-            image = self.__stream_to_RGB_np(stream)
+        return array, self.info
 
-            return image, self.info
-
-    def capture_betas(self, fullPath, filePrefix, numberImages, analogGain, exposureDurationUs):
-        """Capture desired number of frames from camera object and write to disk (save threaded version)
-        fullPath: save path
-        filePrefix: prefix of saved file
-        numberImages: number of frames to capture
-        analogGain: fixed analog gain setting; automatic if None
-        exposureDurationUs: fixed shutter speed; automatic if None
-        Returns: nothing
-        """
-
-        # Make sure the LED is off just in case+
-        self.led.off()
-
-        # Make destination directory if it doesn't exist
-        check_or_make_directory(fullPath)
-
-        # Capture
-        camera = picamera.PiCamera()
-
-        # Set up camera for beta imaging mode
-        self.__setup_beta(camera, analogGain, exposureDurationUs)
-
-        # Announce
-        print(f"Capturing beta image(s): path = {fullPath} prefix = {filePrefix} # {numberImages}\n"
-              f"Gain = {camera.analog_gain} Exposure (s) = {camera.shutter_speed / 1000000.}")
-
-        for i in range(numberImages + 1):
-
-            # Capture one image
-            image, meta = self.__snap_beta(camera)
-
-            # Write image to file, toss first image
-            if i > 0:
-                betaImage = LrmImage(image, meta)
-                outFileName = f"{append_slash(fullPath)}{filePrefix}_{i}"
-                betaImage.save(outFileName)
-
-            print(f"Captured {i} of {numberImages} Duration = {meta['capture_time_s']}")
-
-            # Store for display
-            self.lastBetaImage = image
-
-        # Framerate needs to be set to 1 in order to let the camera close at long shutter speeds
-        camera.framerate = 1
-        camera.close()
-
-    def capture_beta(self, fullPath, filePrefix, numberImages, analogGain, exposureDurationUs, threshold=0):
-        """Integrate desired number of frames from camera object and write to disk (save threaded version)
-        fullPath: save path
+    def capture_beta(self, dataDir, filePrefix, numberImages, analogGain, exposureDurationUs, threshold=0):
+        """Integrate desired number of frames from camera object and write to disk (save threaded version - no idea what this means)
+        dataDir: save dir
         filePrefix: prefix of saved file
         numberImages: number of frames to capture
         analogGain: fixed analog gain setting; automatic if None
@@ -411,60 +295,61 @@ class LRM:
         self.led.off()
 
         # Make destination directory if it doesn't exist
-        check_or_make_directory(fullPath)
-
-        # Capture
-        camera = picamera.PiCamera()
+        check_or_make_directory(dataDir)
 
         # Set up camera for beta acquisition
-        self.__setup_beta(camera, analogGain, exposureDurationUs)
+        self.__setup_beta(analogGain, exposureDurationUs)
 
         # Announce
-        # Announce
-        print(f"Capturing beta image(s): path = {fullPath} prefix = {filePrefix} # {numberImages}\n"
-              f"Gain = {camera.analog_gain} Exposure (s) = {camera.shutter_speed / 1000000.}")
-
+        metadata = self.picam2.capture_metadata()
+        print(f"Capturing beta image(s): path = {dataDir} prefix = {filePrefix} # {numberImages}\n")
+        print("Gain = " + str(metadata["AnalogueGain"]))
+        print("Exposure (us) = " + str({metadata["ExposureTime"]}))
 
         infoList = []
 
-        for i in range(numberImages + 1):
+        # TODO - they tossed the first image for some reason - figure out why
+        for i in range(numberImages):
 
             # Capture one image
 
-            image, info = self.__snap_beta(camera, threshold)
+            array, info = self.__snap_beta(threshold)
+            infoList.append(info)
 
-            # Write image to file, toss first image
-            if i > 0:
+            # Sum image
+            if i == 0:
+                summed = array
+            else:
+                summed = summed + array
 
-                infoList.append(info)
+            print("Captured " + str(i) + "/" + str(numberImages) + " Duration = " + str(
+                info['capture_time_s']) + " Sum = " + str(array.sum()) + " Total sum = " + str(summed.sum()))
+                
+        # TODO - Write image to file - just work with numpy arrays and pickle for now. They seem to be knowledgable about dtype as well
+        # bizarre to work with infoList given eacch iteration checks for same exposure/gain
+        outFileName = append_slash(dataDir) + filePrefix
+        np.save(outFileName + ".npy")
+        
+        with open('saved_dictionary.pkl', 'wb') as f:
+            pickle.dump(infoList[-1], f)
+        
+        # TODO - How to open pickle dict
+        # with open('saved_dictionary.pkl', 'rb') as f:
+        #     loaded_dict = pickle.load(f)
 
-                # Sum image
-                if i == 1:
-                    summed = image
-                else:
-                    summed = summed + image
 
-                print("Captured " + str(i) + "/" + str(numberImages) + " Duration = " + str(
-                    info['capture_time_s']) + " Sum = " + str(image.sum()) + " Total sum = " + str(summed.sum()))
+        # TODO - rewrite LrmImage class 
+        # betaImage = LrmImage(summed, infoList)
+        # betaImage.save(outFileName)
 
-        # Close the camera as soon as we can
-        camera.framerate = 1
-        camera.close()
-
-        # Write image to file
-        betaImage = LrmImage(summed, infoList)
-        outFileName = append_slash(fullPath) + filePrefix
-        betaImage.save(outFileName)
-
-        # Store for display
-        self.lastBetaImage = summed
-
-    def capture_brightfield(self, fullPath, filePrefix, numberImages, analogGain=None, exposureDurationUs=None):
+    def capture_brightfield(self, dataDir, filePrefix, numberImages, analogGain=None, exposureDurationUs=None):
         """Capture one or more brightfield images and write to disk as .png
-        fullPath: path to save brightfield images
+        dataDir: path to save brightfield images
         filePrefix: prefix of saved images
         numberImages: number of frames to capture        
-        analogGain: fixed analog gain setting; automatic if None
+        analogGain: fixed analog gain setting; automatiIf the file is a .npy file, then a single array is returned.
+
+c if None
         exposureDurationUs: fixed shutter speed; automatic if None
         Returns: nothing
         """
@@ -473,46 +358,29 @@ class LRM:
         self.led.on()
 
         # Make destination directory if it doesn't exist
-        check_or_make_directory(fullPath)
+        check_or_make_directory(dataDir)
 
-        # Capture
-        camera = picamera.PiCamera()
-
-        self.__setup_brightfield(camera, analogGain, exposureDurationUs)
-
+        self.__setup_brightfield(analogGain, exposureDurationUs)
+        
         # Announce
-        print(
-            "Capturing brightfield image(s): path = " + fullPath + " prefix = " + filePrefix + " # " + str(numberImages)
-            + " Gain = " + str(round(camera.analog_gain, 2))
-            + " Exposure (s) = " + str(round(camera.shutter_speed / 1000000., 2)))
+        metadata = self.picam2.capture_metadata()
+        print(f"Capturing brightfield image(s): path = {dataDir} prefix = {filePrefix} # {numberImages}\n")
+        print("Gain = " + str(metadata["AnalogueGain"]))
+        print("Exposure (us) = " + str({metadata["ExposureTime"]}))
 
         for i in range(numberImages):
             # Capture one image
-            image, info = self.__snap_brightfield(camera)
+            array, info = self.__snap_brightfield()
             print("Captured " + str(i) + "/" + str(numberImages) + " Duration = " + str(info['capture_time_s']))
 
-            # Store for display
-            self.lastBfImage = image
-
             # Extract data from camera stream
-            outFileFullPath = append_slash(fullPath) + filePrefix + str(i)
 
-            # bfImage = BetaImage(image,info)
+            bfOutFileFullPath = append_slash(dataDir) + filePrefix + str(i) + ".j2k"
 
-            # Close camera as soon as we can
-            camera.framerate = 1
-            camera.close()
-
-            # Save file as lz4-compressed data
-            # disable for now for space savings 5/23/2019 and speed
-            # bfImage.save(outFileFullPath)
-
-            # ... and also as .jp2 for quick preview
-            bfOutFileFullPath = append_slash(fullPath) + filePrefix + str(i) + ".j2k"
-
+            # TODO - check if this is buggy... - looks like it might be easier to directly convert numpy -> PIL -> save png?
             # Sum along color channel axis and enforce uint16 output
-            image = image.astype(np.uint8)
-            imageU16 = image.sum(axis=2)
+            array = array.astype(np.uint8)
+            imageU16 = array.sum(axis=2)
             imageU16 = imageU16.astype(np.uint16)
 
             # Save to file
@@ -521,6 +389,7 @@ class LRM:
         # Turn LED off
         self.led.off()
 
+    # TODO - refactor the next three functions to take a brightfield autoexposure
     def is_camera_settled(self, camera):
         """Check if the camera autoexposure mode has settled on a gain and shutter setting
         
@@ -592,6 +461,7 @@ class LRM:
 
         return lastGain, lastShutterUs
 
+    # TODO - replace this with a plotting/image display function
     def preview_last(self, hold=False):
 
         def prepare_image(image, colorMap='gray'):
