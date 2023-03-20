@@ -2,29 +2,15 @@
 Defines LRM class that contains all beta microscope functionality
 '''
 
-# added imports
-from picamera2 import Picamera2
-from libcamera import controls as libcontrols
-from pprint import *
-
-import io
-from PIL import Image
-import numpy as np
-import time
-import datetime
-import os
-import glob
-from gpiozero import LED
-import pickle
-import lz4.frame
-from lrmimage import LrmImage
-
-# mpl packages
-import matplotlib
-
-matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
+import numpy as np
+from picamera2 import Picamera2
+from PIL import Image
+from pprint import *
+import time
+from gpiozero import LED
+
+from util import *
 
 # Useful stuff to print before modifying any configurations/controls
 # pprint(picam2.sensor_modes)
@@ -48,76 +34,15 @@ DEFAULT_AWB_GAINS = (1.0/8.0*32.0, 11.0/8.0*32.0)
 # Percent differece threshold for ExposureTime and AnalogueGain for __check_camera()
 EXPOSURE_TIME_THRESHOLD = 10
 GAIN_THRESHOLD = 25
-
-# Util functions
-def is_within_percent(a, b, percent):
-    """ Return true if a is percent within b """
-    diff = abs(a - b)
-
-    if a == 0:
-        p = (diff) * 100
-
-    else:
-        p = (diff / a) * 100.
-
-    within = p < percent
-    return within
-
-
-def append_slash(path):
-    """ Append a slash a path if one doesn't already exist """
-    if not (path[-1] == '/'):
-        path += '/'
-
-    return path
-
-
-def _get_parent_directory(path):
-    """Get the parent directory of a given filepath. If path is to a dir, just return the dirpath but with a / at the end"""
-    # Check that file extension is ".xxx" and that path doesn't end with '/'
-    isFilePath = path[-4] == '.' and not (path[-1] == '/')
-
-    if isFilePath:
-        directory = path[: path.rfind('/') + 1]
-        return directory
-    else:
-        return append_slash(path)
-
-
-def check_or_make_directory(path):
-    """ Check for or make path to data sub directory """
-
-    path = _get_parent_directory(path)
-    directory = os.path.dirname(path)
-    dirExists = os.path.exists(directory)
-
-    if not dirExists:
-        os.makedirs(directory)
+SETTLED_PERCENT = 2.5
 
 # TODO - update all the docstrings and delete the old/deprecated code
-# TODO - Don't open a Preview.QTGL window upon class initialization - write a user function to do that
+# TODO - Write plotting functions for brightfield/beta images
 # TODO - look for time.sleep() calls and make changes accordingly
+# TODO - after using this class practically, see if we want to use reboot loop for exposure time and gain settings
 
 class LRM:
-    """Class containing all beta microscope functionality
-
-    Example use case:
-    
-    Capture brightfield images as separate files:
-        
-        gain, shutter = LRM.get_brightfield_exposure()
-        
-        lrm = LRM()    
-        
-        lrm.snap_brightfield('./data/bf/','bf', 1, gain, shutter)
-
-    Capture multiple beta images as separate files:
-        lrm.snap_betas('./data/beta/','bm_5g_10000ms',1000,2.5,10)
-
-    Capture and sum multiple beta image into a single file single file:
-        lrm.snap_beta('./data/beta/','bm_5g_10000ms_1000fr',1000,2.5,10)
-    
-    """
+    """Class containing all beta microscope functionality - see fuction docstrings."""
 
     def __init__(self):
 
@@ -139,18 +64,11 @@ class LRM:
         self.picam2.start() # Uses Preview.NULL by default
         time.sleep(2)
 
-    # TODO - rename __setup_beta() and __setup_brightfield() to __setup_beta_controls() and __setup_brightfield_controls()
-    def __setup_beta(self, gain=None, exposure_us=None, ColourGains=DEFAULT_AWB_GAINS):
-        """Start up the camera with settings optimized for beta imaging
+    def __setup_beta_controls(self, gain, exposure_us, ColourGains=DEFAULT_AWB_GAINS):
+        """Set the camera controls to those optimized for beta imaging.
         gain: analog gain
         exposure_us : exposure time in us
         """
-
-        # Gain and shutter speed must be provided
-        if gain is None:
-            raise Exception("No gain provided!")
-        elif exposure_us is None:
-            raise Exception("No exposure_us provided!")
 
         # Copy provided values into LRM gain and shutter setpoint variables
         self._gainSet = gain
@@ -178,32 +96,29 @@ class LRM:
             'Sharpness': 1.0
         }
         self.picam2.set_controls(controls)
+
         # wait for automatic gain/shutter adjustment
-        time.sleep(2)
+        time.sleep(3)
 
-
-    # TODO - figure out why this function exists - it's the same as _setup_beta, but (1,1) -> (1,2) in terms of old awb gains
-    def __setup_brightfield(self, gain=None, exposure_us=None):
-        """Start up the camera with settings optimized for beta imaging
+    def __setup_brightfield_controls(self, gain, exposure_us):
+        """Start up the camera with settings optimized for brightfield imaging. (Same as beta, but ColourGains 1,1 -> 1,2).
         gain: analog gain
         exposure_us : exposure time in us
         """
 
-        self.__setup_beta(gain, exposure_us, ColourGains=(1.0/8.0 * 32.0, 2.0/8.0*32.0))
-
+        self.__setup_beta_controls(gain, exposure_us, ColourGains=(1.0/8.0 * 32.0, 2.0/8.0*32.0))
 
     def __check_camera(self):
-        """ Check both the gain and exposure settings using metadata functionality"""
+        """ Check that the gain and exposure settings are at the desired setpoint using camera metadata."""
         metadata = self.picam2.capture_metadata()
         gain = metadata["AnalogueGain"]
         exposure_us = metadata["ExposureTime"]
 
-        exposure_correct = is_within_percent(self.exposureSet, exposure_us, EXPOSURE_TIME_THRESHOLD)
-        gain_correct = is_within_percent(self.gainSet, gain, GAIN_THRESHOLD)
+        exposure_correct = is_within_percent(self._exposureSet, exposure_us, EXPOSURE_TIME_THRESHOLD)
+        gain_correct = is_within_percent(self._gainSet, gain, GAIN_THRESHOLD)
 
         return exposure_correct and gain_correct
 
-    # TODO - see the control loop that uses this function and reboot - maybe don't even need this function
     def __reboot(self):
         """ Reboots the camera """
 
@@ -213,17 +128,13 @@ class LRM:
         self.picam2.start() # Uses Preview.NULL by default
         time.sleep(3)
 
-
-    # TODO - reinstate reboot loop under if not self.__check_camera() ???
     def __snap_beta(self, threshold=0):
         """
-        Grabs an RGB frame (np.ndarrary) from camera using beta imaging controls
-        Sums across the RGB channels and zeros out pixels less than threshold (default 0 does no thresholding).
-        returns: np.ndarray camera image, image metadata+additional info
+        Grabs an RGB frame (np.ndarrary) from camera (function assumes you are using beta imaging controls)
+        Sums across the RGB channels and zeros out pixels less than threshold (default threshold=0 does no thresholding).
+        returns: np.ndarray camera image, image metadata+capture time
         """
 
-        # Setup camera controls, and check you've waited long enough
-        # self.__setup_beta(self._gainSet, self._exposureSet)
         if not self.__check_camera():
             metadata = self.picam2.capture_metadata()
             print("Gain was: " + str(metadata["AnalogueGain"]) + ", wanted " + str(self._gainSet))
@@ -231,13 +142,13 @@ class LRM:
             raise Exception("Camera gain or exposure time was not set correctly.")
 
         # Capture image (np.ndarray) from the camera + record total capture time
-        # NOTE - use the naming convention array to differentiate from PIL image objects - consistent with picamera2 manual
         captureStartTime = time.time()
         request = self.picam2.capture_request("main")
         array, metadata = request.make_array(), request.get_metadata()
+        request.release()
         captureTimeSeconds = time.time() - captureStartTime
 
-        self.info = self.__get_info()
+        self.info = metadata
         self.info['capture_time_s'] = captureTimeSeconds
         
         # Sum across RGB Channels to generate one channel array
@@ -258,11 +169,9 @@ class LRM:
     def __snap_brightfield(self):
         """
         Grabs an RGB frame (np.ndarrary) from camera with brightfield imaging controls
-        returns: (np.ndarray) camera image, (dict) image metadata+additonal info
+        returns: (3D np.ndarray) camera image, (dict) image metadata+capturetime
         """
 
-        # Setup camera controls, and check you've waited long enough
-        # self.__setup_brightfield(self._gainSet, self._exposureSet)
         if not self.__check_camera():
             metadata = self.picam2.capture_metadata()
             print("Gain was: " + str(metadata["AnalogueGain"]) + ", wanted " + str(self._gainSet))
@@ -270,35 +179,36 @@ class LRM:
             raise Exception("Camera gain or exposure time was not set correctly.")
 
         # Capture image (np.ndarray) from the camera + record total capture time
-        # NOTE - use the naming convention array to differentiate from PIL image objects - consistent with picamera2 manual
         captureStartTime = time.time()
         request = self.picam2.capture_request("main")
         array, metadata = request.make_array(), request.get_metadata()
+        request.release()
         captureTimeSeconds = time.time() - captureStartTime
 
-        self.info = self.__get_info()
+        self.info = metadata
         self.info['capture_time_s'] = captureTimeSeconds
 
         return array, self.info
 
-    def capture_beta(self, dataDir, filePrefix, numberImages, analogGain, exposureDurationUs, threshold=0):
-        """Integrate desired number of frames from camera object and write to disk (save threaded version - no idea what this means)
+    def capture_beta(self, dataDir, filePrefix, numberImages, gain, exposure_us, threshold=0):
+        """Integrate numberImages, and save resulting summed image to hdf5 file (with metadata from last image)
         dataDir: save dir
         filePrefix: prefix of saved file
-        numberImages: number of frames to capture
-        analogGain: fixed analog gain setting; automatic if None
-        exposureDurationUs: fixed shutter speed; automatic if None
+        numberImages: number of frames to integrate over
+        gain: analog gain setting
+        exposure_us: exposure time
         Returns: nothing
         """
 
         # Make sure the LED is off just in case
         self.led.off()
+        time.sleep(0.5)
 
         # Make destination directory if it doesn't exist
         check_or_make_directory(dataDir)
 
         # Set up camera for beta acquisition
-        self.__setup_beta(analogGain, exposureDurationUs)
+        self.__setup_beta_controls(gain, exposure_us)
 
         # Announce
         metadata = self.picam2.capture_metadata()
@@ -306,12 +216,11 @@ class LRM:
         print("Gain = " + str(metadata["AnalogueGain"]))
         print("Exposure (us) = " + str({metadata["ExposureTime"]}))
 
+        # TODO - for now just saving last image's metadata
         infoList = []
 
-        # TODO - they tossed the first image for some reason - figure out why
+        # TODO - they tossed the first image for some reason - figure out why, for now deprecated this behavior
         for i in range(numberImages):
-
-            # Capture one image
 
             array, info = self.__snap_beta(threshold)
             infoList.append(info)
@@ -322,45 +231,32 @@ class LRM:
             else:
                 summed = summed + array
 
-            print("Captured " + str(i) + "/" + str(numberImages) + " Duration = " + str(
+            print("Captured " + str(i+1) + "/" + str(numberImages) + " Duration = " + str(
                 info['capture_time_s']) + " Sum = " + str(array.sum()) + " Total sum = " + str(summed.sum()))
                 
-        # TODO - Write image to file - just work with numpy arrays and pickle for now. They seem to be knowledgable about dtype as well
-        # bizarre to work with infoList given eacch iteration checks for same exposure/gain
-        outFileName = append_slash(dataDir) + filePrefix
-        np.save(outFileName + ".npy")
-        
-        with open('saved_dictionary.pkl', 'wb') as f:
-            pickle.dump(infoList[-1], f)
-        
-        # TODO - How to open pickle dict
-        # with open('saved_dictionary.pkl', 'rb') as f:
-        #     loaded_dict = pickle.load(f)
+        # Save data using h5py
+        outFileName = append_slash(dataDir) + filePrefix + '.hdf5'
+        exp_dict = {"img" : (summed, infoList[-1])}
+        dump_to_hdf5(exp_dict, outFileName)
+        return
 
-
-        # TODO - rewrite LrmImage class 
-        # betaImage = LrmImage(summed, infoList)
-        # betaImage.save(outFileName)
-
-    def capture_brightfield(self, dataDir, filePrefix, numberImages, analogGain=None, exposureDurationUs=None):
-        """Capture one or more brightfield images and write to disk as .png
+    def capture_brightfield(self, dataDir, filePrefix, numberImages, gain, exposure_us):
+        """Capture one or more brightfield images and write to disk in an hdf5 file (dset names will look like img1, img2, ...)
         dataDir: path to save brightfield images
-        filePrefix: prefix of saved images
+        filePrefix: prefix of saved images 
         numberImages: number of frames to capture        
-        analogGain: fixed analog gain setting; automatiIf the file is a .npy file, then a single array is returned.
-
-c if None
-        exposureDurationUs: fixed shutter speed; automatic if None
+        gain: fixed analog gain setting; 
+        exposure_us: exposure Time in us
         Returns: nothing
         """
 
-        # Make sure LED is on
         self.led.on()
+        time.sleep(0.5)
 
         # Make destination directory if it doesn't exist
         check_or_make_directory(dataDir)
 
-        self.__setup_brightfield(analogGain, exposureDurationUs)
+        self.__setup_brightfield_controls(gain, exposure_us)
         
         # Announce
         metadata = self.picam2.capture_metadata()
@@ -368,149 +264,90 @@ c if None
         print("Gain = " + str(metadata["AnalogueGain"]))
         print("Exposure (us) = " + str({metadata["ExposureTime"]}))
 
+        exp_dict = {}
+        outFileName = append_slash(dataDir) + filePrefix + '.hdf5'
+
         for i in range(numberImages):
-            # Capture one image
+            # Capture an image
             array, info = self.__snap_brightfield()
-            print("Captured " + str(i) + "/" + str(numberImages) + " Duration = " + str(info['capture_time_s']))
+            print("Captured " + str(i+1) + "/" + str(numberImages) + " Duration = " + str(info['capture_time_s']))
 
-            # Extract data from camera stream
+            # For now save RGB images, I don't know why they did this...
+            # array = array.astype(np.uint8)
+            # imageU16 = array.sum(axis=2)
+            # imageU16 = imageU16.astype(np.uint16)
 
-            bfOutFileFullPath = append_slash(dataDir) + filePrefix + str(i) + ".j2k"
+            exp_dict["img" + str(i+1)] = (array, info)
 
-            # TODO - check if this is buggy... - looks like it might be easier to directly convert numpy -> PIL -> save png?
-            # Sum along color channel axis and enforce uint16 output
-            array = array.astype(np.uint8)
-            imageU16 = array.sum(axis=2)
-            imageU16 = imageU16.astype(np.uint16)
+        dump_to_hdf5(exp_dict, outFileName)
 
-            # Save to file
-            Image.fromarray(imageU16).save(bfOutFileFullPath)
-
-        # Turn LED off
         self.led.off()
 
-    # TODO - refactor the next three functions to take a brightfield autoexposure
-    def is_camera_settled(self, camera):
-        """Check if the camera autoexposure mode has settled on a gain and shutter setting
+    def __is_camera_settled(self):
+        """Check if the camera autoexposure mode has settled on a gain and exposure time setting
         
-        returns: most recent gain, shutter speed, and True if camera is settled
+        returns: gain, exposure_us, True if camera is settled
         """
-        settledPercent = 2.5
 
         # Get current gain / exposure values
-        lastGain = camera.analog_gain
-        lastShutterUs = camera.exposure_speed
+        metadata = self.picam2.capture_metadata()
+        lastGain = metadata['AnalogueGain']
+        lastExposureTime = metadata['ExposureTime']
 
         # Give the camera some time to settle, based on current exposure value
-        settleWaitTime = lastShutterUs / 1000000.
+        settleWaitTime = lastExposureTime / 1e6
         time.sleep(1 + (settleWaitTime * 5))
 
         # Get current gain / exposure values
-        gain = camera.analog_gain
-        shutter = camera.exposure_speed
+        metadata = self.picam2.capture_metadata()
+        gain = metadata['AnalogueGain']
+        ExposureTime = metadata['ExposureTime']
 
         # Check if values have change much during wait period
-        settled = (is_within_percent(gain, lastGain, settledPercent) and
-                   is_within_percent(shutter, lastShutterUs, settledPercent))
+        settled = (is_within_percent(gain, lastGain, SETTLED_PERCENT) and
+                   is_within_percent(ExposureTime, lastExposureTime, SETTLED_PERCENT))
 
-        return gain, shutter, settled
+        return gain, ExposureTime, settled
 
-    def wait_for_camera_settled(self, camera):
-        """ Wait for camera autoexposure mode to settle on analog gain and shutter settings
-        returns: settled gain and shutter speed values
+    def wait_for_camera_settled(self):
+        """ Wait for camera autoexposure mode to settle on analog gain and exposure time settings
+        returns: settled gain and exposure time values
         """
 
         settled = False
 
         # Loop until the camera has settled
         while not settled:
-            lastGain, lastShutterUs, settled = self.is_camera_settled(camera)
+            lastGain, lastExposureTime, settled = self.__is_camera_settled()
             time.sleep(0.1)
 
-        return lastGain, lastShutterUs
+        return lastGain, lastExposureTime
 
-    def get_brightfield_exposure(self):
-        """Run the camera in autoexposure mode and report gain and shutter speed once stabilized
+    def get_brightfield_autoexposure_controls(self):
+        """Run the camera in autoexposure mode and report gain and exposure time once stabilized. 
+        The returned paramters can then be used to set the gain/exposure settings with __setup_brightfield_controls()
         
         returns:
             gain: analog gain of camera
-            shutterUs: shutter speed in microseconds
+            exposure_us: shutter speed in microseconds
         """
 
         # Turn on LED
         self.led.on()
 
-        # Start up camera 
-        camera = picamera.PiCamera()
-        camera.iso = 100
-        camera.framerate_range = (30, 30)
-        camera.resolution = (3280, 2464)
-        camera.sensor_mode = 0
-        camera.awb_mode = 'auto'
-        camera.shutter_speed = 0
-        camera.exposure_mode = 'auto'
+        # Turn on autoexposure mode
 
         # Wait for camera to stabilize and collect stabilized values
-        lastGain, lastShutterUs = self.wait_for_camera_settled(camera)
+        lastGain, lastExposureTime = self.wait_for_camera_settled()
 
-        # Turn off LED
+        # Turn off LED and return to de
         self.led.off()
 
-        # Close the camera
-        camera.close()
+        return lastGain, lastExposureTime
 
-        return lastGain, lastShutterUs
+    def plot_brightfield_arr(self, img_arr):
+        "Plot a single brightfield (RGB) image"
 
-    # TODO - replace this with a plotting/image display function
-    def preview_last(self, hold=False):
+    def plot_beta_arr(self, img_arr):
+        "Plot a single beta (BW) image"
 
-        def prepare_image(image, colorMap='gray'):
-            displayResolution = (616, 820)
-            im = Image.fromarray(image[1140:2140, 882:1882])
-            im = im.convert('L')
-            # im.thumbnail((820,616))
-            im = np.array(im, dtype=np.uint8)
-            cmap = cm.get_cmap(colorMap)
-            im = cmap(im)
-            im = im * 255
-            im = im.astype(np.uint8)
-
-            return im
-
-        bfYes = self.lastBfImage is not None
-        betaYes = self.lastBetaImage is not None
-
-        if hold == False:
-            plt.figure("Preview")
-            plt.ion()
-            plt.show()
-        else:
-            plt.figure("Preview")
-
-        if bfYes:
-            bf = prepare_image(self.lastBfImage, 'gray')
-
-        if betaYes:
-            beta = prepare_image(self.lastBetaImage, 'inferno')
-
-        if bfYes and betaYes:
-            merged = bf + beta
-            plt.imshow(merged)
-
-        else:
-            if bfYes:
-                plt.figure()
-                plt.imshow(bf)
-
-            else:
-
-                if betaYes:
-                    plt.figure()
-                    plt.clim(0, 10)
-                    plt.imshow(beta)
-
-        if hold == False:
-            plt.draw()
-            plt.pause(0.01)
-        else:
-            plt.show()
