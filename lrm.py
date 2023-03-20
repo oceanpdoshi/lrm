@@ -2,6 +2,7 @@
 Defines LRM class that contains all beta microscope functionality
 '''
 
+from libcamera import controls as libcontrols # for enums
 import matplotlib.pyplot as plt
 import numpy as np
 from picamera2 import Picamera2
@@ -30,6 +31,10 @@ DEFAULT_SENSOR_MODE = 3 # 10 bit, (3280, 2464), SRGGB10_CSI2P format, (75us, 117
 
 # Default ColourGain Setting (camera controls) - disables awb when set
 DEFAULT_AWB_GAINS = (1.0/8.0*32.0, 11.0/8.0*32.0)
+
+# From the paper - default gain was 2.5 
+DEFAULT_BETA_GAIN = 2.5
+DEFAULT_BETA_EXPOSURE = int(5e6) # this might have to be an integer (picam2.camera_controls[ExposureTime] limits are ints)
 
 # Percent differece threshold for ExposureTime and AnalogueGain for __check_camera()
 EXPOSURE_TIME_THRESHOLD = 10
@@ -152,7 +157,8 @@ class LRM:
         self.info['capture_time_s'] = captureTimeSeconds
         
         # Sum across RGB Channels to generate one channel array
-        array = array.sum(axis=2, dtype=np.uint16)
+        # array = array.sum(axis=2, dtype=np.uint16)
+        array = array.sum(axis=2)
 
         # Apply threshold
         array[array < threshold] = 0
@@ -190,14 +196,14 @@ class LRM:
 
         return array, self.info
 
-    def capture_beta(self, dataDir, filePrefix, numberImages, gain, exposure_us, threshold=0):
+    def capture_beta(self, numberImages, gain, exposure_us, threshold=0, dataDir=None, filePrefix=None, save=False):
         """Integrate numberImages, and save resulting summed image to hdf5 file (with metadata from last image)
         dataDir: save dir
         filePrefix: prefix of saved file
         numberImages: number of frames to integrate over
         gain: analog gain setting
         exposure_us: exposure time
-        Returns: nothing
+        Returns: exp_dict = {"img" : (summed, metadata)}
         """
 
         # Make sure the LED is off just in case
@@ -235,19 +241,21 @@ class LRM:
                 info['capture_time_s']) + " Sum = " + str(array.sum()) + " Total sum = " + str(summed.sum()))
                 
         # Save data using h5py
-        outFileName = append_slash(dataDir) + filePrefix + '.hdf5'
+        outFileName = append_slash(dataDir) + filePrefix + new_timestamp() + '.hdf5'
         exp_dict = {"img" : (summed, infoList[-1])}
-        dump_to_hdf5(exp_dict, outFileName)
-        return
+        if save:
+            dump_to_hdf5(exp_dict, outFileName)
 
-    def capture_brightfield(self, dataDir, filePrefix, numberImages, gain, exposure_us):
-        """Capture one or more brightfield images and write to disk in an hdf5 file (dset names will look like img1, img2, ...)
+        return exp_dict
+
+    def capture_brightfield(self, numberImages, gain, exposure_us, dataDir=None, filePrefix=None, save=False):
+        """Capture one or more brightfield images and write to disk in an hdf5 file 
         dataDir: path to save brightfield images
         filePrefix: prefix of saved images 
         numberImages: number of frames to capture        
         gain: fixed analog gain setting; 
         exposure_us: exposure Time in us
-        Returns: nothing
+        Returns: exp_dict = {"img1" : (img, metadata), "img2" : (img, metadata), ...}
         """
 
         self.led.on()
@@ -265,7 +273,7 @@ class LRM:
         print("Exposure (us) = " + str({metadata["ExposureTime"]}))
 
         exp_dict = {}
-        outFileName = append_slash(dataDir) + filePrefix + '.hdf5'
+        outFileName = append_slash(dataDir) + filePrefix + new_timestamp() + '.hdf5'
 
         for i in range(numberImages):
             # Capture an image
@@ -279,9 +287,13 @@ class LRM:
 
             exp_dict["img" + str(i+1)] = (array, info)
 
-        dump_to_hdf5(exp_dict, outFileName)
+        if save:
+            dump_to_hdf5(exp_dict, outFileName)
 
         self.led.off()
+        time.sleep(0.5)
+
+        return exp_dict
 
     def __is_camera_settled(self):
         """Check if the camera autoexposure mode has settled on a gain and exposure time setting
@@ -316,6 +328,30 @@ class LRM:
 
         settled = False
 
+        # Put the camera in autoexposure mode
+        controls = {
+            'AeConstraintMode': libcontrols.AeConstraintModeEnum.Normal,
+            'AeEnable': True,
+            'AeExposureMode': libcontrols.AeExposureModeEnum.Normal,
+            'AeMeteringMode': libcontrols.AeMeteringModeEnum.CentreWeighted,
+            # 'AnalogueGain': gain,
+            'AwbEnable': False, # Don't want autowhite balances, this is also automatically disabled by setting ColourGains
+            'AwbMode': 0,
+            'Brightness': 0.0,
+            # 'ColourCorrectionMatrix': (-16.0, 16.0, None), read-only, see manual (Appendix C)
+            'ColourGains': DEFAULT_AWB_GAINS, # See manual (Appendix C)
+            'Contrast': 1.0,
+            # 'ExposureTime': exposure_us,
+            # 'ExposureValue': 0.0,
+            # 'FrameDurationLimits': (47183, 11767556, None), set by camera_config 
+            'NoiseReductionMode': 0, # no noise reduction wanted
+            'Saturation': 1.0,
+            'ScalerCrop': (0, 0, 3280, 2464),
+            'Sharpness': 1.0
+        }
+        self.picam2.set_controls(controls)
+        time.sleep(3)
+
         # Loop until the camera has settled
         while not settled:
             lastGain, lastExposureTime, settled = self.__is_camera_settled()
@@ -345,9 +381,11 @@ class LRM:
 
         return lastGain, lastExposureTime
 
+    # TODO - before writing these see what is being loaded/saved 
     def plot_brightfield_arr(self, img_arr):
         "Plot a single brightfield (RGB) image"
-
+        
     def plot_beta_arr(self, img_arr):
         "Plot a single beta (BW) image"
+        plt.plot(img_arr, cmap='gray', vmin=0, vmax=255)
 
