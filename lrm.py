@@ -24,7 +24,7 @@ LED_PIN = 21
 '''V2 resolutions (3280,2464) (1920,1080) (1640,1232) (1640,922) (1280,720) (640,480)'''
 # Main stream configuration
 DEFAULT_RESOLUTION = (3280, 2464)
-DEFAULT_STREAM_FORMAT = 'XBGR8888' # see manual, this corresopnds to RGBA, with A fixed to 255 (may want to switch to just RGB format)
+DEFAULT_STREAM_FORMAT = 'XBGR8888' # see manual, this corresponds to a channel order of RGBA (what plt.imshow() expects), A fixed to 255 -> could switch to BGR888
 
 # Raw stream configuration
 DEFAULT_SENSOR_MODE = 3 # 10 bit, (3280, 2464), SRGGB10_CSI2P format, (75us, 11766829us) exposure limits, 21.19fp
