@@ -24,13 +24,13 @@ LED_PIN = 21
 '''V2 resolutions (3280,2464) (1920,1080) (1640,1232) (1640,922) (1280,720) (640,480)'''
 # Main stream configuration
 DEFAULT_RESOLUTION = (3280, 2464)
-DEFAULT_STREAM_FORMAT = 'XBGR8888'
+DEFAULT_STREAM_FORMAT = 'XBGR8888' # see manual, this corresopnds to RGBA, with A fixed to 255 (may want to switch to just RGB format)
 
 # Raw stream configuration
 DEFAULT_SENSOR_MODE = 3 # 10 bit, (3280, 2464), SRGGB10_CSI2P format, (75us, 11766829us) exposure limits, 21.19fp
 
 # Default ColourGain Setting (camera controls) - disables awb when set
-DEFAULT_AWB_GAINS = (1.0/8.0*32.0, 11.0/8.0*32.0)
+DEFAULT_AWB_GAINS = (0.0/8.0*32.0, 0.0/8.0*32.0)
 
 # From the paper - default gain was 2.5 
 DEFAULT_BETA_GAIN = 2.5
@@ -111,7 +111,9 @@ class LRM:
         exposure_us : exposure time in us
         """
 
-        self.__setup_beta_controls(gain, exposure_us, ColourGains=(1.0/8.0 * 32.0, 2.0/8.0*32.0))
+        ColourGains = DEFAULT_AWB_GAINS
+
+        self.__setup_beta_controls(gain, exposure_us, ColourGains=ColourGains)
 
     def __check_camera(self):
         """ Check that the gain and exposure settings are at the desired setpoint using camera metadata."""
@@ -149,7 +151,7 @@ class LRM:
         # Capture image (np.ndarray) from the camera + record total capture time
         captureStartTime = time.time()
         request = self.picam2.capture_request("main")
-        array, metadata = request.make_array(), request.get_metadata()
+        array, metadata = request.make_array("main"), request.get_metadata()
         request.release()
         captureTimeSeconds = time.time() - captureStartTime
 
@@ -187,7 +189,7 @@ class LRM:
         # Capture image (np.ndarray) from the camera + record total capture time
         captureStartTime = time.time()
         request = self.picam2.capture_request("main")
-        array, metadata = request.make_array(), request.get_metadata()
+        array, metadata = request.make_array("main"), request.get_metadata()
         request.release()
         captureTimeSeconds = time.time() - captureStartTime
 
@@ -381,7 +383,7 @@ class LRM:
 
         return lastGain, lastExposureTime
 
-    # TODO - before writing these see what is being loaded/saved 
+    # TODO - write these functions, use plt.imshow(), add conversions to uint8 (0-255 images) or whatever format the raw images are supposed to be
     def plot_brightfield_arr(self, img_arr):
         "Plot a single brightfield (RGB) image"
         
