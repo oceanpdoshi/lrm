@@ -4,6 +4,7 @@ Defines LRM class that contains all beta microscope functionality
 
 from libcamera import controls as libcontrols # for enums
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
 import numpy as np
 from picamera2 import Picamera2
 from PIL import Image
@@ -24,7 +25,7 @@ LED_PIN = 21
 '''V2 resolutions (3280,2464) (1920,1080) (1640,1232) (1640,922) (1280,720) (640,480)'''
 # Main stream configuration
 DEFAULT_RESOLUTION = (3280, 2464)
-DEFAULT_STREAM_FORMAT = 'XBGR8888' # see manual, this corresponds to a channel order of RGBA (what plt.imshow() expects), A fixed to 255 -> could switch to BGR888
+DEFAULT_STREAM_FORMAT = 'BGR888' # see manual
 
 # Raw stream configuration
 DEFAULT_SENSOR_MODE = 3 # 10 bit, (3280, 2464), SRGGB10_CSI2P format, (75us, 11766829us) exposure limits, 21.19fp
@@ -36,7 +37,7 @@ DEFAULT_AWB_GAINS = (0.0/8.0*32.0, 0.0/8.0*32.0)
 DEFAULT_BETA_GAIN = 2.5
 DEFAULT_BETA_EXPOSURE = int(5e6) # this might have to be an integer (picam2.camera_controls[ExposureTime] limits are ints)
 
-# Percent differece threshold for ExposureTime and AnalogueGain for __check_camera()
+# Percent differece for ExposureTime and AnalogueGain for __check_camera()
 EXPOSURE_TIME_THRESHOLD = 10
 GAIN_THRESHOLD = 25
 SETTLED_PERCENT = 2.5
@@ -135,7 +136,7 @@ class LRM:
         self.picam2.start() # Uses Preview.NULL by default
         time.sleep(3)
 
-    def __snap_beta(self, threshold=0):
+    def __snap_beta(self, threshold=0.0):
         """
         Grabs an RGB frame (np.ndarrary) from camera (function assumes you are using beta imaging controls)
         Sums across the RGB channels and zeros out pixels less than threshold (default threshold=0 does no thresholding).
@@ -159,8 +160,9 @@ class LRM:
         self.info['capture_time_s'] = captureTimeSeconds
         
         # Sum across RGB Channels to generate one channel array
-        # array = array.sum(axis=2, dtype=np.uint16)
-        array = array.sum(axis=2)
+        # NOTE - Doing this instead of a weighted sum because we are treating values as "camera counts"
+        array = array.astype(np.uint64)
+        array = array.sum(axis=2) # this does automatic cast from uint8 to uint64 when numbers exceed 255, above line is to be explicit
 
         # Apply threshold
         array[array < threshold] = 0
@@ -169,7 +171,7 @@ class LRM:
         self.info['image_sum'] = array.sum()
         self.info['image_std'] = np.std(array)
         self.info['image_max'] = array.max()
-        self.info['image_std'] = array.min()
+        self.info['image_min'] = array.min()
         self.info['image_mean'] = array.mean()
 
         return array, self.info
@@ -198,7 +200,7 @@ class LRM:
 
         return array, self.info
 
-    def capture_beta(self, numberImages, gain, exposure_us, threshold=0, dataDir=None, filePrefix=None, save=False):
+    def capture_beta(self, numberImages, gain, exposure_us, threshold=0.0, dataDir=None, filePrefix=None, save=False):
         """Integrate numberImages, and save resulting summed image to hdf5 file (with metadata from last image)
         dataDir: save dir
         filePrefix: prefix of saved file
@@ -383,11 +385,24 @@ class LRM:
 
         return lastGain, lastExposureTime
 
-    # TODO - write these functions, use plt.imshow(), add conversions to uint8 (0-255 images) or whatever format the raw images are supposed to be
+    # NOTE - original repo uses greyscale conversion of Image.convert("L") from PIL for BOTH brightfield and beta images (makes no sense, code probably won't run)
+    # This results in image between 0.0-1.0, then they apply cmap, before multiplying by 255.0 and converting to int
+    # They use 'gray' for brightfield image (i.e convert RGB image to BW)
+    # They use 'inferno' for beta image
+
+    # TODO - may want to convert RGB images to BW for display in the future
     def plot_brightfield_arr(self, img_arr):
         "Plot a single brightfield (RGB) image"
-        
+        img_arr = img_arr.astype(np.uint8) # Each channel will either be ints from 0-255 or floats from 0.0-255.0 (loaded from hdf5 file) -> ensure that they are ints
+        plt.imshow(img_arr)
+        plt.show()
+    
+    # TODO - gotta figure out the best way of displaying beta imaging data. Is simple linear scaling to [0,1] range ok? Maybe log in the future
     def plot_beta_arr(self, img_arr):
         "Plot a single beta (BW) image"
-        plt.plot(img_arr, cmap='gray', vmin=0, vmax=255)
+        # Each pixel will either be ints from 0-3*255*n_images or floats from 0.0-3*255.0*n_images (loaded from hdf5 file) -> map to [0.0, 1.0]
+        # img_arr = img_arr / np.max(img_arr) # normalize image to be bewteen 0 and 1
+        # plt.imshow(img_arr, cmap='gray', vmin=0.0, vmax=1.0)
+        plt.imshow(img_arr, cmap='inferno', norm=Normalize()) # this should be the same as the above 2 (commented out) lines of code
+        plt.show()
 
