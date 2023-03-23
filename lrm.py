@@ -4,7 +4,7 @@ Defines LRM class that contains all beta microscope functionality
 
 from libcamera import controls as libcontrols # for enums
 import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize
+from matplotlib.colors import Normalize, LogNorm
 import numpy as np
 from picamera2 import Picamera2
 from PIL import Image
@@ -14,6 +14,7 @@ from gpiozero import LED
 
 from util import *
 
+# TODO - make class functions to print these
 # Useful stuff to print before modifying any configurations/controls
 # pprint(picam2.sensor_modes)
 # pprint(picam2.camera_controls)
@@ -28,7 +29,7 @@ DEFAULT_RESOLUTION = (3280, 2464)
 DEFAULT_STREAM_FORMAT = 'BGR888' # see manual
 
 # Raw stream configuration
-DEFAULT_SENSOR_MODE = 3 # 10 bit, (3280, 2464), SRGGB10_CSI2P format, (75us, 11766829us) exposure limits, 21.19fp
+DEFAULT_SENSOR_MODE = 3 # 10 bit, (3280, 2464), SRGGB10_CSI2P format, (75us, 11766829us) exposure limits, 21.19fps
 
 # Default ColourGain Setting (camera controls) - disables awb when set
 DEFAULT_AWB_GAINS = (0.0/8.0*32.0, 0.0/8.0*32.0)
@@ -42,9 +43,11 @@ EXPOSURE_TIME_THRESHOLD = 10
 GAIN_THRESHOLD = 25
 SETTLED_PERCENT = 2.5
 
-# TODO - update all the docstrings and delete the old/deprecated code
+# TODO - update all the docstrings and delete the old/deprecated code888' # see manual
+
+# Raw stream configuration
+DEFAULT_SENSOR_MODE = 3 # 10 bit,
 # TODO - Write plotting functions for brightfield/beta images
-# TODO - look for time.sleep() calls and make changes accordingly
 # TODO - after using this class practically, see if we want to use reboot loop for exposure time and gain settings
 
 class LRM:
@@ -54,7 +57,7 @@ class LRM:
 
         # Most recent analog gain setting and exposure setting (us)
         self._gainSet = None
-        self._exposureSet = None # TODO - this was changed from shutterSET - old repo used shutter speed, here we use exposures https://github.com/raspberrypi/picamera2/issues/145
+        self._exposureSet = None
 
         self.info = {}
 
@@ -63,8 +66,6 @@ class LRM:
 
         # Configure (Chapter 4, Appendix B) and start() the camera
         self.picam2 = Picamera2()
-        # TODO - decide whether or not we need raw stream
-        # config = self.picam2.create_still_configuration(main={"size" : DEFAULT_RESOLUTION, "format" : DEFAULT_STREAM_FORMAT}, raw={self.picam2.sensor_modes[DEFAULT_SENSOR_MODE]})
         config = self.picam2.create_still_configuration(main={"size" : DEFAULT_RESOLUTION, "format" : DEFAULT_STREAM_FORMAT})
         self.picam2.configure(config)
         self.picam2.start() # Uses Preview.NULL by default
@@ -131,6 +132,7 @@ class LRM:
         """ Reboots the camera """
 
         self.picam2.stop()
+        print("rebooting")
         config = self.picam2.create_still_configuration(main={"size" : DEFAULT_RESOLUTION, "format" : DEFAULT_STREAM_FORMAT})
         self.picam2.configure(config)
         self.picam2.start() # Uses Preview.NULL by default
@@ -143,11 +145,11 @@ class LRM:
         returns: np.ndarray camera image, image metadata+capture time
         """
 
-        if not self.__check_camera():
+        while not self.__check_camera():
             metadata = self.picam2.capture_metadata()
             print("Gain was: " + str(metadata["AnalogueGain"]) + ", wanted " + str(self._gainSet))
             print("ExposureTime: " + str(metadata["ExposureTime"]) + " [us]" + ", wanted " + str(self._exposureSet) + " [us]")
-            raise Exception("Camera gain or exposure time was not set correctly.")
+            self.__reboot()
 
         # Capture image (np.ndarray) from the camera + record total capture time
         captureStartTime = time.time()
@@ -226,10 +228,9 @@ class LRM:
         print("Gain = " + str(metadata["AnalogueGain"]))
         print("Exposure (us) = " + str({metadata["ExposureTime"]}))
 
-        # TODO - for now just saving last image's metadata
+        # NOTE - for now just saving last image's metadata
         infoList = []
 
-        # TODO - they tossed the first image for some reason - figure out why, for now deprecated this behavior
         for i in range(numberImages):
 
             array, info = self.__snap_beta(threshold)
@@ -374,6 +375,7 @@ class LRM:
 
         # Turn on LED
         self.led.on()
+        time.sleep(0.5)
 
         # Turn on autoexposure mode
 
@@ -382,27 +384,29 @@ class LRM:
 
         # Turn off LED and return to de
         self.led.off()
+        time.sleep(0.5)
 
         return lastGain, lastExposureTime
 
-    # NOTE - original repo uses greyscale conversion of Image.convert("L") from PIL for BOTH brightfield and beta images (makes no sense, code probably won't run)
-    # This results in image between 0.0-1.0, then they apply cmap, before multiplying by 255.0 and converting to int
-    # They use 'gray' for brightfield image (i.e convert RGB image to BW)
-    # They use 'inferno' for beta image
-
-    # TODO - may want to convert RGB images to BW for display in the future
     def plot_brightfield_arr(self, img_arr):
-        "Plot a single brightfield (RGB) image"
-        img_arr = img_arr.astype(np.uint8) # Each channel will either be ints from 0-255 or floats from 0.0-255.0 (loaded from hdf5 file) -> ensure that they are ints
-        plt.imshow(img_arr)
+        "Plot a single brightfield (RGB) image as a BW image"
+        img_arr = img_arr / np.max(img_arr) # Each channel will either be ints from 0-255 or floats from 0.0-255.0 (loaded from hdf5 file)
+        img_arr = np.dot(img_arr[...,:3], [0.2989, 0.5870, 0.1140])
+        plt.imshow(img_arr, cmap='gray', norm=Normalize())
+        plt.colorbar()
         plt.show()
     
-    # TODO - gotta figure out the best way of displaying beta imaging data. Is simple linear scaling to [0,1] range ok? Maybe log in the future
     def plot_beta_arr(self, img_arr):
         "Plot a single beta (BW) image"
         # Each pixel will either be ints from 0-3*255*n_images or floats from 0.0-3*255.0*n_images (loaded from hdf5 file) -> map to [0.0, 1.0]
         # img_arr = img_arr / np.max(img_arr) # normalize image to be bewteen 0 and 1
         # plt.imshow(img_arr, cmap='gray', vmin=0.0, vmax=1.0)
         plt.imshow(img_arr, cmap='inferno', norm=Normalize()) # this should be the same as the above 2 (commented out) lines of code
+        plt.colorbar()
         plt.show()
 
+    def plot_beta_arr_log(self, img_arr):
+        "Plot a single beta (BW) image on log scale"
+        plt.imshow(img_arr, cmap='inferno', norm=LogNorm())
+        plt.colorbar()
+        plt.show()

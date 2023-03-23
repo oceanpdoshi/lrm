@@ -4,27 +4,32 @@ print(os.getcwd())
 
 from lrm import LRM
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize, LogNorm
 from util import hdf5_to_dict
 
 import IPython
 
 lrm = LRM()
 
-numberImages = 2
-gain, exposure_us = lrm.get_brightfield_autoexposure_controls()
+numberImages = 60
+# gain, exposure_us = lrm.get_brightfield_autoexposure_controls()
+gain = 2.0
+exposure_us = int(1e6)
+threshold=0.0
 dataDir = '/home/sdoshi/github/lrm/data'
-filePrefix = 'test_beta'
-# exp_dict = lrm.capture_beta(numberImages, gain, exposure_us, threshold=0.0, dataDir=dataDir, filePrefix=filePrefix, save=True)
-exp_dict = lrm.capture_brightfield(numberImages, gain, exposure_us, dataDir=dataDir, filePrefix=filePrefix, save=True)
+filePrefix = 'beta_waters_exp60s_'
+exp_dict = lrm.capture_beta(numberImages, gain, exposure_us, threshold=threshold, dataDir=dataDir, filePrefix=filePrefix, save=True)
+# exp_dict = lrm.capture_brightfield(numberImages, gain, exposure_us, dataDir=dataDir, filePrefix=filePrefix, save=True)
 
-img, metadata = exp_dict['img1']
+img, metadata = exp_dict['img']
 print(metadata['ExposureTime'])
 print(exposure_us)
 print(gain)
 print(metadata['AnalogueGain'])
 
-lrm.plot_brightfield_arr(img)
-
+# lrm.plot_brightfield_arr(img)
+lrm.plot_beta_arr(img)
+lrm.plot_beta_arr_log(img)
 # IPython.embed()
 
 # NOTE - when you load from an hdf5 file (using read_direct), it will return arrays of type np.float64 (correct numerical value, but not ints)
