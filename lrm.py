@@ -199,7 +199,7 @@ class LRM:
 
         return array, self.info
 
-    def capture_beta(self, numberImages, gain, exposure_us, threshold=0.0, dataDir=None, filePrefix=None, save=False):
+    def capture_beta(self, numberImages, gain, exposure_us, threshold=0.0, fpn_correct='', dataDir=None, filePrefix=None, save=False):
         """Integrate numberImages, and save resulting summed image to hdf5 file (with metadata from last image)
         dataDir: save dir
         filePrefix: prefix of saved file
@@ -225,12 +225,19 @@ class LRM:
         print("Gain = " + str(metadata["AnalogueGain"]))
         print("Exposure (us) = " + str({metadata["ExposureTime"]}))
 
+        if fpn_correct != '':
+            fpn_correct_arr = np.load(fpn_correct)
+            fpn_correct = True
+
         # NOTE - for now just saving last image's metadata
         infoList = []
 
         for i in range(numberImages):
 
             array, info = self.__snap_beta(threshold)
+            if fpn_correct:
+                array = array - fpn_correct
+                array = np.multiply((array >= 0), array) # don't store negative array values
             infoList.append(info)
 
             # Sum image

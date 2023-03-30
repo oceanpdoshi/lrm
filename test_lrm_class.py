@@ -18,24 +18,11 @@ numberImages = 1
 gain = 1.0
 exposure_us = int(1e6)
 threshold=0.0
+fpn_correct = '/home/sdoshi/github/lrm/fpn_correction_1s_lightson.npy'
 dataDir = '/home/sdoshi/github/lrm/data'
 filePrefix = new_timestamp() + '_' + 'camerav3noir_1s_testshield'
-exp_dict = lrm.capture_beta(numberImages, gain, exposure_us, threshold=threshold, dataDir=dataDir, filePrefix=filePrefix, save=False)
+exp_dict = lrm.capture_beta(numberImages, gain, exposure_us, threshold=threshold, fpn_correct=fpn_correct, dataDir=dataDir, filePrefix=filePrefix, save=False)
 # exp_dict = lrm.capture_brightfield(numberImages, gain, exposure_us, dataDir=dataDir, filePrefix=filePrefix, save=True)
-'''
-dark counts (np.sum(img))) for a 1s exposure at 1x analog gain
-Room Lights on
-1985084
-1895626
-1935937
-
-1727156
-1721377
-1729981
-
-For a 1s exposure, ignoring "hot" pixels, it looks like about ~1-15 dark counts per px - will use flatfield to correct for hot pixels
-Gonna use a threshold of 10px for now, and will ignore the two hotspots that I see
-'''
 
 img, metadata = exp_dict['img']
 print(metadata['ExposureTime'])
