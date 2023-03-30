@@ -250,6 +250,49 @@ class LRM:
 
         return exp_dict
 
+    def capture_beta_series(self, numberImages, gain, exposure_us, threshold=0.0, dataDir=None, filePrefix=None, save=False):
+        """Capture numberImages of beta images and save them to hdf5 file (with metadata from last image)
+        dataDir: save dir
+        filePrefix: prefix of saved file
+        numberImages: number of frames to integrate over
+        gain: analog gain setting
+        exposure_us: exposure time
+        Returns: exp_dict = {"img" : (summed, metadata)}
+        """
+
+        # Make sure the LED is off just in case
+        self.led.off()
+        time.sleep(0.5)
+
+        # Make destination directory if it doesn't exist
+        check_or_make_directory(dataDir)
+
+        # Set up camera for beta acquisition
+        self.__setup_beta_controls(gain, exposure_us)
+
+        # Announce
+        metadata = self.picam2.capture_metadata()
+        print(f"Capturing beta image(s): path = {dataDir} prefix = {filePrefix} # {numberImages}\n")
+        print("Gain = " + str(metadata["AnalogueGain"]))
+        print("Exposure (us) = " + str({metadata["ExposureTime"]}))
+
+        exp_dict = {}
+
+        for i in range(numberImages):
+
+            array, info = self.__snap_beta(threshold)
+            exp_dict["img" + str(i+1)] = (array, info)
+
+            print("Captured " + str(i+1) + "/" + str(numberImages) + " Duration = " + str(
+                info['capture_time_s']) + " Sum = " + str(array.sum()))
+                
+        # Save data using h5py
+        outFileName = append_slash(dataDir) + filePrefix + new_timestamp() + '.hdf5'
+        if save:
+            dump_to_hdf5(exp_dict, outFileName)
+
+        return exp_dict
+
     def capture_brightfield(self, numberImages, gain, exposure_us, dataDir=None, filePrefix=None, save=False):
         """Capture one or more brightfield images and write to disk in an hdf5 file 
         dataDir: path to save brightfield images
