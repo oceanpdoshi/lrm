@@ -14,6 +14,7 @@ from gpiozero import LED
 
 from util import *
 
+# TODO - update all the docstrings and delete the deprecated code
 # TODO - make class functions to print these
 # Useful stuff to print before modifying any configurations/controls
 # pprint(picam2.sensor_modes)
@@ -24,12 +25,13 @@ from util import *
 LED_PIN = 21
 
 '''V2 resolutions (3280,2464) (1920,1080) (1640,1232) (1640,922) (1280,720) (640,480)'''
+'''V3 resolutions (4608, 2592) (2304, 1296) (1536, 864)'''
 # Main stream configuration
-DEFAULT_RESOLUTION = (3280, 2464)
+DEFAULT_RESOLUTION = (4608, 2592)
 DEFAULT_STREAM_FORMAT = 'BGR888' # see manual
 
 # Raw stream configuration
-DEFAULT_SENSOR_MODE = 3 # 10 bit, (3280, 2464), SRGGB10_CSI2P format, (75us, 11766829us) exposure limits, 21.19fps
+DEFAULT_SENSOR_MODE = 2 # 10 bit, (4608, 2592), SRGGB10_CSI2P format, (26, 1722331)us  exposure limits, 14.35fps
 
 # Default ColourGain Setting (camera controls) - disables awb when set
 DEFAULT_AWB_GAINS = (0.0/8.0*32.0, 0.0/8.0*32.0)
@@ -43,12 +45,6 @@ EXPOSURE_TIME_THRESHOLD = 10
 GAIN_THRESHOLD = 25
 SETTLED_PERCENT = 2.5
 
-# TODO - update all the docstrings and delete the old/deprecated code888' # see manual
-
-# Raw stream configuration
-DEFAULT_SENSOR_MODE = 3 # 10 bit,
-# TODO - Write plotting functions for brightfield/beta images
-# TODO - after using this class practically, see if we want to use reboot loop for exposure time and gain settings
 
 class LRM:
     """Class containing all beta microscope functionality - see fuction docstrings."""
@@ -81,7 +77,8 @@ class LRM:
         self._gainSet = gain
         self._exposureSet = exposure_us
 
-        # any paramter not commented is just set to default alue
+        # any paramter not commented is just set to default value
+        # all af (autofocus values are set to 0 - most importatly AfMode 0=manual, so no autofocusing)
         controls = {
             'AeConstraintMode': 0,
             'AeEnable': False, # don't want Autoexposure
@@ -202,7 +199,7 @@ class LRM:
 
         return array, self.info
 
-    def capture_beta(self, numberImages, gain, exposure_us, threshold=0.0, dataDir=None, filePrefix=None, save=False):
+    def capture_beta(self, numberImages, gain, exposure_us, threshold=0.0, fpn_correct='', dataDir=None, filePrefix=None, save=False):
         """Integrate numberImages, and save resulting summed image to hdf5 file (with metadata from last image)
         dataDir: save dir
         filePrefix: prefix of saved file
@@ -228,12 +225,19 @@ class LRM:
         print("Gain = " + str(metadata["AnalogueGain"]))
         print("Exposure (us) = " + str({metadata["ExposureTime"]}))
 
+        if fpn_correct != '':
+            fpn_correct_arr = np.load(fpn_correct)
+            fpn_correct = True
+
         # NOTE - for now just saving last image's metadata
         infoList = []
 
         for i in range(numberImages):
 
             array, info = self.__snap_beta(threshold)
+            if fpn_correct:
+                array = array - fpn_correct
+                array = np.multiply((array >= 0), array) # don't store negative array values
             infoList.append(info)
 
             # Sum image
@@ -248,6 +252,49 @@ class LRM:
         # Save data using h5py
         outFileName = append_slash(dataDir) + filePrefix + new_timestamp() + '.hdf5'
         exp_dict = {"img" : (summed, infoList[-1])}
+        if save:
+            dump_to_hdf5(exp_dict, outFileName)
+
+        return exp_dict
+
+    def capture_beta_series(self, numberImages, gain, exposure_us, threshold=0.0, dataDir=None, filePrefix=None, save=False):
+        """Capture numberImages of beta images and save them to hdf5 file (with metadata from last image)
+        dataDir: save dir
+        filePrefix: prefix of saved file
+        numberImages: number of frames to integrate over
+        gain: analog gain setting
+        exposure_us: exposure time
+        Returns: exp_dict = {"img" : (summed, metadata)}
+        """
+
+        # Make sure the LED is off just in case
+        self.led.off()
+        time.sleep(0.5)
+
+        # Make destination directory if it doesn't exist
+        check_or_make_directory(dataDir)
+
+        # Set up camera for beta acquisition
+        self.__setup_beta_controls(gain, exposure_us)
+
+        # Announce
+        metadata = self.picam2.capture_metadata()
+        print(f"Capturing beta image(s): path = {dataDir} prefix = {filePrefix} # {numberImages}\n")
+        print("Gain = " + str(metadata["AnalogueGain"]))
+        print("Exposure (us) = " + str({metadata["ExposureTime"]}))
+
+        exp_dict = {}
+
+        for i in range(numberImages):
+
+            array, info = self.__snap_beta(threshold)
+            exp_dict["img" + str(i+1)] = (array, info)
+
+            print("Captured " + str(i+1) + "/" + str(numberImages) + " Duration = " + str(
+                info['capture_time_s']) + " Sum = " + str(array.sum()))
+                
+        # Save data using h5py
+        outFileName = append_slash(dataDir) + filePrefix + new_timestamp() + '.hdf5'
         if save:
             dump_to_hdf5(exp_dict, outFileName)
 

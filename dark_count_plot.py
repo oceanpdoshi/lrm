@@ -4,7 +4,7 @@ import os
 os.chdir('/home/sdoshi/github/lrm')
 print(os.getcwd())
 
-total_counts = np.load('/home/sdoshi/github/lrm/data/dark_count_sweep2.npy')
+total_counts = np.load('/home/sdoshi/github/lrm/data/dark_count_sweep_2023-03-28-18-55-20.npy')
 
 # NOTE - sweep 1
 # gain = [2.0, 4.0, 6.0, 8.0]
@@ -13,8 +13,14 @@ total_counts = np.load('/home/sdoshi/github/lrm/data/dark_count_sweep2.npy')
 # N_points = 5
 
 # NOTE - sweep 2 - lens off
-gain = [1.0, 2.0, 3.0, 4.0]
-exposure_us = list(10**np.array([2,3,4,5,6])) # 100-1,000,000us (100us-1s) exposure times
+# gain = [1.0, 2.0, 3.0, 4.0]
+# exposure_us = list(10**np.array([2,3,4,5,6])) # 100-1,000,000us (100us-1s) exposure times
+# threshold = 0.0
+# N_points = 5
+
+# Sweep with noIR picamera
+gain = [1.0, 2.0, 3.0]
+exposure_us = list(10**np.array([2,3,4,5,6])) # 100-1,000,000us (100us-1s) exposure times (camera limits are 26 to 1722331)
 threshold = 0.0
 N_points = 5
 
@@ -27,10 +33,9 @@ total_counts_std = np.std(total_counts, axis=2)
 # error_bars[2,: ] = total_counts_max
 
 
-
 fig = plt.figure()
 for i, g in enumerate(gain):
-    plt.errorbar(exposure_us, total_counts_mean[i], yerr=total_counts_std[i], label='g=%.1f' % g)
+    plt.errorbar(exposure_us, total_counts_mean[i], yerr=total_counts_std[i], label='g=%.2f' % g)
 
 ax = fig.axes[0]
 ax.set_xscale('log')
